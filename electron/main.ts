@@ -251,6 +251,65 @@ async function scanDesktop(): Promise<ScanEntry[]> {
   return out
 }
 
+/* ------------------------------------------------------------------ 파일 조작 */
+
+/** dir 안에서 겹치지 않는 이름을 찾는다 — 바탕화면과 같은 "이름 (2)" 규칙. */
+async function uniqueDest(dir: string, name: string) {
+  const ext = path.extname(name)
+  const stem = path.basename(name, ext)
+  let candidate = path.join(dir, name)
+  for (let i = 2; ; i += 1) {
+    try {
+      await fs.access(candidate)
+    } catch {
+      return candidate
+    }
+    candidate = path.join(dir, `${stem} (${i})${ext}`)
+  }
+}
+
+const norm = (p: string) => path.resolve(p).toLowerCase()
+
+/** src를 destDir 안으로 실제 이동한다. 성공하면 새 경로를 준다. */
+async function moveInto(src: string, destDir: string): Promise<{ ok: boolean; newPath?: string; error?: string }> {
+  try {
+    const srcStat = await fs.stat(src)
+    const destStat = await fs.stat(destDir)
+    if (!destStat.isDirectory()) return { ok: false, error: '대상이 폴더가 아니에요' }
+    if (norm(src) === norm(destDir)) return { ok: false, error: '자기 자신이에요' }
+    if (srcStat.isDirectory() && (norm(destDir) + path.sep).startsWith(norm(src) + path.sep)) {
+      return { ok: false, error: '자기 자신 안으로는 옮길 수 없어요' }
+    }
+    if (norm(path.dirname(src)) === norm(destDir)) return { ok: false, error: '이미 그 폴더에 있어요' }
+
+    const target = await uniqueDest(destDir, path.basename(src))
+    try {
+      await fs.rename(src, target)
+    } catch (error) {
+      // 다른 드라이브로는 rename이 안 된다 — 복사 후 원본 삭제로 폴백
+      if ((error as NodeJS.ErrnoException)?.code === 'EXDEV') {
+        await fs.cp(src, target, { recursive: true })
+        await fs.rm(src, { recursive: true, force: true })
+      } else {
+        throw error
+      }
+    }
+    // 필드에 담겨 숨김 속성이 걸린 채 이동하면 폴더 안에서 안 보인다. 반드시 해제.
+    if (process.platform === 'win32') {
+      try {
+        execFileSync('attrib', ['-h', target], { stdio: 'ignore' })
+      } catch {
+        /* 속성 해제 실패는 치명적이지 않다 */
+      }
+    }
+    log(`이동: ${src} → ${target}`)
+    return { ok: true, newPath: target }
+  } catch (error) {
+    log(`이동 실패: ${src} → ${destDir}: ${error}`)
+    return { ok: false, error: '옮기지 못했어요 (사용 중이거나 권한 없음)' }
+  }
+}
+
 /* ------------------------------------------------------------------ IPC */
 
 function registerIpc() {
@@ -328,6 +387,59 @@ function registerIpc() {
 
   ipcMain.handle('shell:reveal', (_e, target: string) => {
     shell.showItemInFolder(target)
+  })
+
+  ipcMain.handle('fs:moveInto', (_e, src: string, destDir: string) => moveInto(src, destDir))
+
+  ipcMain.handle('fs:rename', async (_e, target: string, newName: string) => {
+    try {
+      const clean = newName.trim()
+      if (!clean || /[\\/:*?"<>|]/.test(clean)) return { ok: false, error: '쓸 수 없는 이름이에요' }
+      const next = path.join(path.dirname(target), clean)
+      if (norm(next) === norm(target)) return { ok: true, newPath: target }
+      try {
+        await fs.access(next)
+        return { ok: false, error: '같은 이름이 이미 있어요' }
+      } catch {
+        /* 비어 있음 — 진행 */
+      }
+      await fs.rename(target, next)
+      log(`이름 변경: ${target} → ${next}`)
+      return { ok: true, newPath: next }
+    } catch (error) {
+      log(`이름 변경 실패: ${target}: ${error}`)
+      return { ok: false, error: '이름을 바꾸지 못했어요 (사용 중일 수 있어요)' }
+    }
+  })
+
+  ipcMain.handle('fs:trash', async (_e, target: string) => {
+    try {
+      // 숨김 상태로 휴지통에 들어가면 복원했을 때도 안 보인다. 먼저 해제.
+      if (process.platform === 'win32') {
+        try {
+          execFileSync('attrib', ['-h', target], { stdio: 'ignore' })
+        } catch {
+          /* 계속 진행 */
+        }
+      }
+      await shell.trashItem(target)
+      log(`휴지통으로: ${target}`)
+      return { ok: true }
+    } catch (error) {
+      log(`휴지통 실패: ${target}: ${error}`)
+      return { ok: false, error: '휴지통으로 보내지 못했어요' }
+    }
+  })
+
+  ipcMain.handle('fs:newFolder', async () => {
+    try {
+      const target = await uniqueDest(app.getPath('desktop'), '새 폴더')
+      await fs.mkdir(target)
+      log(`새 폴더: ${target}`)
+      return { ok: true, newPath: target }
+    } catch (error) {
+      return { ok: false, error: `폴더를 만들지 못했어요: ${error}` }
+    }
   })
 
   ipcMain.handle('dialog:pick', async (_e, mode: 'file' | 'folder') => {

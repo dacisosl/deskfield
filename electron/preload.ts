@@ -38,6 +38,23 @@ const api = {
   open: (target: string) => ipcRenderer.invoke('shell:open', target) as Promise<string | null>,
   setHidden: (target: string, hidden: boolean) =>
     ipcRenderer.invoke('fs:setHidden', target, hidden) as Promise<boolean>,
+
+  moveInto: (src: string, destDir: string) =>
+    ipcRenderer.invoke('fs:moveInto', src, destDir) as Promise<{
+      ok: boolean
+      newPath?: string
+      error?: string
+    }>,
+  renameItem: (target: string, newName: string) =>
+    ipcRenderer.invoke('fs:rename', target, newName) as Promise<{
+      ok: boolean
+      newPath?: string
+      error?: string
+    }>,
+  trashItem: (target: string) =>
+    ipcRenderer.invoke('fs:trash', target) as Promise<{ ok: boolean; error?: string }>,
+  newFolder: () =>
+    ipcRenderer.invoke('fs:newFolder') as Promise<{ ok: boolean; newPath?: string; error?: string }>,
   reveal: (target: string) => ipcRenderer.invoke('shell:reveal', target) as Promise<void>,
   pick: (mode: 'file' | 'folder') => ipcRenderer.invoke('dialog:pick', mode) as Promise<string[]>,
 

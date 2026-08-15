@@ -37,6 +37,7 @@ interface Props {
   onFieldMenu: (field: Field, x: number, y: number) => void
   onDropPaths: (id: string, paths: string[], index: number) => void
   onMoveItem: (itemId: string, toFieldId: string, index: number) => void
+  onDropInto: (folder: FieldItem, payload: { itemId?: string; paths?: string[] }) => void
   onGesture: (active: boolean) => void
   /** 이 필드를 맨 앞으로 (겹쳐 있을 때 조작 중인 필드가 가려지지 않게) */
   onRaise: (id: string) => void
@@ -53,6 +54,7 @@ export const FieldBox = memo(function FieldBox({
   onFieldMenu,
   onDropPaths,
   onMoveItem,
+  onDropInto,
   onGesture,
   onRaise,
   raised,
@@ -293,6 +295,7 @@ export const FieldBox = memo(function FieldBox({
                 onMenu={onItemMenu}
                 onDragStart={() => onGesture(true)}
                 onDragEnd={() => onGesture(false)}
+                onDropInto={onDropInto}
               />
             </div>
           ))}

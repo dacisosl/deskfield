@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ContextMenu, type MenuSpec } from './components/ContextMenu'
 import { EmojiPicker } from './components/EmojiPicker'
+import { RenameDialog } from './components/RenameDialog'
 import { FieldBox } from './components/FieldBox'
 import { ScanReview, type ScanResult } from './components/ScanReview'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -44,14 +45,15 @@ export default function App() {
   const [scanning, setScanning] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null)
   const [frontId, setFrontId] = useState<string | null>(null)
   const [pickerFor, setPickerFor] = useState<FieldItem | null>(null)
+  const [renameFor, setRenameFor] = useState<FieldItem | null>(null)
   const [updateVersion, setUpdateVersion] = useState<string | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
   const draftStart = useRef<{ x: number; y: number } | null>(null)
 
-  const modalOpen = scanning || showSettings || !!pickerFor
+  const modalOpen = scanning || showSettings || !!pickerFor || !!renameFor
   usePassthrough(editing || gesture || modalOpen || !!menu)
 
   useEffect(() => {
@@ -62,7 +64,7 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return
-    const timer = setTimeout(() => setToast(null), 2600)
+    const timer = setTimeout(() => setToast(null), toast.action ? 6000 : 2600)
     return () => clearTimeout(timer)
   }, [toast])
 
@@ -95,7 +97,7 @@ export default function App() {
 
   useEffect(() => {
     const offAvailable = api.onUpdateAvailable((version) => setUpdateVersion(version))
-    const offNone = api.onUpdateNone(() => setToast('지금이 최신 버전이에요'))
+    const offNone = api.onUpdateNone(() => setToast({ text: '지금이 최신 버전이에요' }))
     return () => {
       offAvailable()
       offNone()
@@ -122,7 +124,7 @@ export default function App() {
 
   const openItem = useCallback(async (item: FieldItem) => {
     const error = await api.open(item.path)
-    if (error) setToast(`열 수 없어요 — ${item.name}`)
+    if (error) setToast({ text: `열 수 없어요 — ${item.name}` })
   }, [])
 
   const applyScan = useCallback(
@@ -133,9 +135,106 @@ export default function App() {
         paths: group.paths,
       }))
       for (const entry of created) await addPaths(entry.id, entry.paths)
-      setToast(`필드 ${created.length}개를 만들었어요`)
+      setToast({ text: `필드 ${created.length}개를 만들었어요` })
     },
     [addField, addPaths, bounds],
+  )
+
+  /** 타일(또는 탐색기 파일)을 폴더 타일에 떨어뜨리면 실제로 그 폴더 안으로 옮긴다. */
+  const dropInto = useCallback(
+    async (folder: FieldItem, payload: { itemId?: string; paths?: string[] }) => {
+      if (payload.itemId) {
+        const owner = stateRef.current.fields.find((f) =>
+          f.items.some((it) => it.id === payload.itemId),
+        )
+        const item = owner?.items.find((it) => it.id === payload.itemId)
+        if (!owner || !item || item.path.startsWith('shell:')) return
+
+        const result = await api.moveInto(item.path, folder.path)
+        if (!result.ok || !result.newPath) {
+          setToast({ text: result.error ?? '옮기지 못했어요' })
+          return
+        }
+        const oldPath = item.path
+        const fieldId = owner.id
+        const moved = result.newPath
+        removeItems([payload.itemId])
+        setToast({
+          text: `"${item.name}" → "${folder.name}" 폴더로 옮겼어요`,
+          action: {
+            label: '실행 취소',
+            run: () => {
+              void (async () => {
+                const back = await api.moveInto(moved, oldPath.replace(/[\\/][^\\/]+$/, ''))
+                if (back.ok && back.newPath) await addPaths(fieldId, [back.newPath])
+                else setToast({ text: back.error ?? '되돌리지 못했어요' })
+              })()
+            },
+          },
+        })
+        return
+      }
+
+      if (payload.paths?.length) {
+        let moved = 0
+        for (const src of payload.paths) {
+          const result = await api.moveInto(src, folder.path)
+          if (result.ok) moved += 1
+        }
+        setToast({
+          text:
+            moved === payload.paths.length
+              ? `${moved}개를 "${folder.name}" 폴더로 옮겼어요`
+              : `${moved}/${payload.paths.length}개만 옮겼어요`,
+        })
+      }
+    },
+    [addPaths, removeItems, stateRef],
+  )
+
+  /** 실제 파일 이름 변경 — 타일과 파일이 함께 바뀐다. */
+  const renameItem = useCallback(
+    async (item: FieldItem, newName: string) => {
+      const result = await api.renameItem(item.path, newName)
+      if (!result.ok || !result.newPath) {
+        setToast({ text: result.error ?? '이름을 바꾸지 못했어요' })
+        return
+      }
+      updateItem(item.id, { path: result.newPath, name: newName })
+    },
+    [updateItem],
+  )
+
+  const trashItem = useCallback(
+    async (item: FieldItem) => {
+      const result = await api.trashItem(item.path)
+      if (!result.ok) {
+        setToast({ text: result.error ?? '휴지통으로 보내지 못했어요' })
+        return
+      }
+      removeItems([item.id])
+      setToast({ text: `"${item.name}"을(를) 휴지통으로 보냈어요` })
+    },
+    [removeItems],
+  )
+
+  const newFolderIn = useCallback(
+    async (fieldId: string) => {
+      const result = await api.newFolder()
+      if (!result.ok || !result.newPath) {
+        setToast({ text: result.error ?? '폴더를 만들지 못했어요' })
+        return
+      }
+      await addPaths(fieldId, [result.newPath])
+      // 만들어진 타일을 찾아 바로 이름 입력으로 — 바탕화면의 '새 폴더' 흐름 그대로
+      setTimeout(() => {
+        const created = stateRef.current.fields
+          .flatMap((f) => f.items)
+          .find((it) => it.path === result.newPath)
+        if (created) setRenameFor(created)
+      }, 120)
+    },
+    [addPaths, stateRef],
   )
 
   /** '원본 숨기기'를 켜고 끄면 이미 담아둔 항목 전체에 즉시 반영한다. */
@@ -196,6 +295,7 @@ export default function App() {
             if (paths.length) await addPaths(field.id, paths)
           },
         },
+        { label: '새 폴더 만들기', onSelect: () => void newFolderIn(field.id) },
         {
           label: '휴지통 타일 추가',
           onSelect: () =>
@@ -217,7 +317,7 @@ export default function App() {
         { label: '필드 삭제', danger: true, onSelect: () => removeField(field.id) },
       ],
     })
-  }, [addPaths, addSpecial, clearField, patchField, removeField, sortField])
+  }, [addPaths, addSpecial, clearField, newFolderIn, patchField, removeField, sortField])
 
   const itemMenu = useCallback((item: FieldItem, x: number, y: number) => {
     const special = item.path.startsWith('shell:')
@@ -230,12 +330,21 @@ export default function App() {
           ? []
           : [{ label: '파일 위치 열기', onSelect: () => void api.reveal(item.path) }]),
         { label: '', separator: true },
-        { label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) },
+        ...(special
+          ? []
+          : [
+              { label: '이름 바꾸기…', onSelect: () => setRenameFor(item) },
+              { label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) },
+            ]),
+        ...(special ? [{ label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) }] : []),
         { label: '', separator: true },
-        { label: '필드에서 빼기', danger: true, onSelect: () => removeItems([item.id]) },
+        { label: '필드에서 빼기', onSelect: () => removeItems([item.id]) },
+        ...(special
+          ? []
+          : [{ label: '휴지통으로 삭제', danger: true, onSelect: () => void trashItem(item) }]),
       ],
     })
-  }, [openItem, removeItems])
+  }, [openItem, removeItems, trashItem])
 
   const dropPaths = useCallback(
     (id: string, paths: string[], index: number) => void addPaths(id, paths, index),
@@ -293,7 +402,7 @@ export default function App() {
         if (!itemId) return
         event.preventDefault()
         removeItems([itemId])
-        setToast('필드에서 뺐어요 — 바탕화면에 다시 보입니다')
+        setToast({ text: '필드에서 뺐어요 — 바탕화면에 다시 보입니다' })
       }}
     >
       {state.fields.map((field) => (
@@ -308,6 +417,7 @@ export default function App() {
           onFieldMenu={fieldMenu}
           onDropPaths={dropPaths}
           onMoveItem={moveItem}
+          onDropInto={dropInto}
           onGesture={setGesture}
           onRaise={setFrontId}
           raised={frontId === field.id}
@@ -351,6 +461,14 @@ export default function App() {
         />
       )}
 
+      {renameFor && (
+        <RenameDialog
+          item={renameFor}
+          onConfirm={(name) => void renameItem(renameFor, name)}
+          onClose={() => setRenameFor(null)}
+        />
+      )}
+
       {pickerFor && (
         <EmojiPicker
           showReset={!!pickerFor.emoji}
@@ -362,7 +480,19 @@ export default function App() {
 
       {toast && (
         <div className="df-toast" data-solid>
-          {toast}
+          <span>{toast.text}</span>
+          {toast.action && (
+            <button
+              type="button"
+              className="df-toast__act"
+              onClick={() => {
+                toast.action?.run()
+                setToast(null)
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
 
@@ -383,7 +513,7 @@ export default function App() {
                   const ok = await api.applyUpdate()
                   if (!ok) {
                     setUpdateBusy(false)
-                    setToast('자동 적용에 실패해서 다운로드 페이지를 열었어요')
+                    setToast({ text: '자동 적용에 실패해서 다운로드 페이지를 열었어요' })
                     setUpdateVersion(null)
                   }
                 }}

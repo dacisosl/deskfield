@@ -48,10 +48,23 @@ interface Props {
   onMenu: (item: FieldItem, x: number, y: number) => void
   onDragStart: (item: FieldItem) => void
   onDragEnd: () => void
+  /** 폴더 타일에 다른 항목을 떨어뜨리면 실제로 그 폴더 안으로 이동 */
+  onDropInto: (folder: FieldItem, payload: { itemId?: string; paths?: string[] }) => void
 }
 
-export const ItemTile = memo(function ItemTile({ item, ink, labels, onOpen, onMenu, onDragStart, onDragEnd }: Props) {
+export const ItemTile = memo(function ItemTile({
+  item,
+  ink,
+  labels,
+  onOpen,
+  onMenu,
+  onDragStart,
+  onDragEnd,
+  onDropInto,
+}: Props) {
+  const [hot, setHot] = useState(false)
   const special = item.path.startsWith('shell:')
+  const canReceive = item.kind === 'folder' && !item.missing && !special
   // 이모지를 골랐거나 폴더·특수 타일이면 OS 아이콘을 아예 요청하지 않는다.
   const wantsOsIcon = !item.emoji && !special && item.kind !== 'folder'
   const icon = useIcon(wantsOsIcon ? item.path : '')
@@ -60,7 +73,7 @@ export const ItemTile = memo(function ItemTile({ item, ink, labels, onOpen, onMe
     <button
       type="button"
       draggable
-      className={`df-tile ${item.missing ? 'df-tile--missing' : ''}`}
+      className={`df-tile ${item.missing ? 'df-tile--missing' : ''} ${hot ? 'df-tile--hot' : ''}`}
       style={{ color: ink }}
       title={special ? item.name : item.missing ? `${item.path}\n(찾을 수 없음)` : item.path}
       onDoubleClick={() => onOpen(item)}
@@ -76,6 +89,33 @@ export const ItemTile = memo(function ItemTile({ item, ink, labels, onOpen, onMe
         onDragStart(item)
       }}
       onDragEnd={onDragEnd}
+      onDragOver={(event) => {
+        if (!canReceive) return
+        const internal = event.dataTransfer.types.includes('application/x-deskfield-item')
+        const files = event.dataTransfer.types.includes('Files')
+        if (!internal && !files) return
+        event.preventDefault()
+        // 필드 본문의 '자리 끼워넣기' 처리보다 폴더 드롭이 우선
+        event.stopPropagation()
+        event.dataTransfer.dropEffect = 'move'
+        setHot(true)
+      }}
+      onDragLeave={() => setHot(false)}
+      onDrop={(event) => {
+        if (!canReceive) return
+        event.preventDefault()
+        event.stopPropagation()
+        setHot(false)
+        const itemId = event.dataTransfer.getData('application/x-deskfield-item')
+        if (itemId && itemId !== item.id) {
+          onDropInto(item, { itemId })
+          return
+        }
+        const paths = Array.from(event.dataTransfer.files)
+          .map((file) => api.pathForFile(file))
+          .filter(Boolean)
+        if (paths.length > 0) onDropInto(item, { paths })
+      }}
     >
       <span className="df-tile__icon">
         {item.emoji ? (
