@@ -1,0 +1,32 @@
+{
+  "name": "deskfield",
+  "productName": "바탕 필드",
+  "version": "0.1.0",
+  "private": true,
+  "description": "바탕화면 폴더를 파스텔 배경 필드로 묶어 정리하는 데스크톱 앱",
+  "author": "dacisosl",
+  "license": "MIT",
+  "main": "dist/electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "lint": "tsc --noEmit",
+    "icon": "node scripts/make-icon.mjs",
+    "dist": "npm run build && electron-builder --win nsis",
+    "dist:portable": "npm run build && electron-builder --win portable"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

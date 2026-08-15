@@ -1,0 +1,29 @@
+appId: com.dacisosl.deskfield
+productName: 바탕 필드
+copyright: © dacisosl
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**
+  - build/icon.png
+  - package.json
+
+win:
+  target: [nsis]
+  icon: build/icon.png
+  artifactName: DeskField-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 바탕 필드
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: DeskField-${version}-portable.${ext}
