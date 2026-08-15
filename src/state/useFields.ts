@@ -108,12 +108,14 @@ export function useFields() {
 
       // 숨김은 앱이 켜져 있는 동안만 — 종료 때 전부 복원되므로,
       // 시작하면서 마지막 배치 기준으로 다시 숨긴다.
+      // 한 번에 처리한다: 항목마다 부르면 시작이 눈에 띄게 느려진다.
       if (next.settings.hideOriginals) {
-        for (const field of checked) {
-          for (const item of field.items) {
-            if (isReal(item) && !item.missing) void api.setHidden(item.path, true)
-          }
-        }
+        const paths = checked
+          .filter((field) => !field.portal)
+          .flatMap((field) => field.items)
+          .filter((item) => isReal(item) && !item.missing)
+          .map((item) => item.path)
+        if (paths.length > 0) void api.setHiddenBatch(paths, true)
       }
     })
     return () => {

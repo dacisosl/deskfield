@@ -7,9 +7,39 @@
       content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' ws:"
     />
     <title>바탕 필드</title>
+    <!--
+      외부 CSS가 도착하기 전까지 브라우저는 기본 흰 배경을 칠한다.
+      전체 화면을 덮는 창이라 그 순간이 '흰 화면'으로 보인다 — 그래서
+      투명 배경만큼은 인라인으로 먼저 박아둔다.
+    -->
+    <style>
+      html,
+      body,
+      #root {
+        margin: 0;
+        height: 100%;
+        background: transparent !important;
+        overflow: hidden;
+      }
+      #df-boot {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        padding: 12px 20px;
+        border-radius: 999px;
+        background: rgba(253, 252, 255, 0.92);
+        box-shadow: 0 10px 30px rgba(35, 35, 60, 0.22);
+        font: 500 13px 'Pretendard', 'Malgun Gothic', system-ui, sans-serif;
+        color: #4a4560;
+        white-space: nowrap;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="df-boot">바탕 필드를 준비하는 중이에요 — 이 안내는 곧 사라집니다</div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

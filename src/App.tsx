@@ -89,6 +89,16 @@ export default function App() {
       if (command === 'cmd:scan') setScanning(true)
       if (command === 'cmd:settings') setShowSettings(true)
       if (command === 'cmd:toggle-bar') setSettings({ showBar: !stateRef.current.settings.showBar })
+      if (command === 'cmd:unhide-all') {
+        const paths = stateRef.current.fields
+          .filter((f) => !f.portal)
+          .flatMap((f) => f.items)
+          .filter((it) => !it.path.startsWith('shell:'))
+          .map((it) => it.path)
+        void api.setHiddenBatch(paths, false)
+        setSettings({ hideOriginals: false })
+        setToast({ text: '숨겨둔 원본을 모두 다시 보이게 했어요' })
+      }
     })
   }, [newField, setSettings, stateRef])
 
@@ -247,12 +257,12 @@ export default function App() {
   const changeSettings = useCallback(
     (patch: Partial<Settings>) => {
       if ('hideOriginals' in patch) {
-        const hide = !!patch.hideOriginals
-        for (const field of state.fields) {
-          for (const item of field.items) {
-            if (!item.path.startsWith('shell:')) void api.setHidden(item.path, hide)
-          }
-        }
+        const paths = state.fields
+          .filter((field) => !field.portal)
+          .flatMap((field) => field.items)
+          .filter((item) => !item.path.startsWith('shell:'))
+          .map((item) => item.path)
+        if (paths.length > 0) void api.setHiddenBatch(paths, !!patch.hideOriginals)
       }
       setSettings(patch)
     },

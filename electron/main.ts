@@ -11,7 +11,16 @@ import {
   shell,
 } from 'electron'
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, watch, promises as fs } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  watch,
+  writeFileSync,
+  promises as fs,
+} from 'node:fs'
 import path from 'node:path'
 
 // CommonJS로 번들된다. Windows에서 asar 안의 ESM 진입점을 읽지 못하는 문제가 있어
@@ -111,10 +120,25 @@ function createWindow() {
   win.setIgnoreMouseEvents(true, { forward: true })
 
   win.on('close', (e) => {
+    // 종료·로그오프 중에는 절대 막지 않는다. 막으면 Windows 종료가 지연되고
+    // 정리 작업이 끝나기 전에 프로세스가 강제로 죽는다.
     if (!quitting) {
       e.preventDefault()
       win?.hide()
     }
+  })
+
+  // Windows 종료·재시작·로그오프. before-quit이 오지 않는 경로라서 이걸 놓치면
+  // 숨긴 파일이 숨겨진 채로 다음 부팅을 맞는다 — 부팅 후 앱이 뜨기 전까지
+  // 바탕화면에서 파일이 사라진 것처럼 보인다.
+  win.on('query-session-end', () => {
+    quitting = true
+    unhideAllSync('세션 종료 예고')
+  })
+
+  win.on('session-end', () => {
+    quitting = true
+    unhideAllSync('세션 종료')
   })
 
   if (DEV_SERVER_URL) {
@@ -148,7 +172,7 @@ function createWindow() {
       log('이벤트가 오지 않아 강제로 창을 띄운다')
       reveal()
     }
-  }, 5000)
+  }, 2000)
 }
 
 /** 창을 띄우고 나서 포커스를 받지 않도록 바꾼다 (순서가 중요하다). */
@@ -505,6 +529,11 @@ function registerIpc() {
     if (focusable) win.focus()
   })
 
+  ipcMain.handle('fs:setHiddenBatch', (_e, paths: string[], hidden: boolean) => {
+    restored = false
+    return setHiddenBatchSync(paths, hidden)
+  })
+
   ipcMain.handle('autostart:get', () => app.getLoginItemSettings().openAtLogin)
 
   ipcMain.handle('autostart:set', (_e, enabled: boolean) => {
@@ -664,6 +693,7 @@ function buildTray() {
     { label: '바탕화면 자동 정리…', click: () => win?.webContents.send('cmd:scan') },
     { label: '도구 막대 보이기/숨기기', click: () => win?.webContents.send('cmd:toggle-bar') },
     { label: '업데이트 확인', click: () => void checkForUpdate(true) },
+    { label: '숨긴 원본 모두 보이기', click: () => win?.webContents.send('cmd:unhide-all') },
     { label: '설정 열기', click: () => win?.webContents.send('cmd:settings') },
     { type: 'separator' },
     {
@@ -689,6 +719,17 @@ function toggleVisible() {
 
 app.whenReady().then(() => {
   app.setAppUserModelId('com.dacisosl.deskfield')
+
+  // 이 앱은 켜져 있어야 필드가 보이고 숨긴 원본도 관리된다.
+  // 그래서 첫 실행에는 자동 시작을 기본으로 켠다 (설정에서 끌 수 있다).
+  if (!existsSync(STATE_FILE) && process.platform === 'win32') {
+    try {
+      app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
+      log('첫 실행 — 자동 시작 켬')
+    } catch (error) {
+      log(`자동 시작 설정 실패: ${error}`)
+    }
+  }
 
   registerIpc()
   log('IPC 등록 완료')
@@ -720,41 +761,87 @@ app.on('window-all-closed', () => {
 })
 
 /**
+ * 숨김 속성을 한 번에 바꾼다. 파일마다 attrib를 띄우면 수십 번의 프로세스
+ * 생성이 되어 종료 제한 시간(수 초) 안에 못 끝낼 수 있다. PowerShell 한 번으로
+ * 처리하고, 경로는 파일로 넘겨 인용부호·특수문자 문제를 피한다.
+ */
+function setHiddenBatchSync(paths: string[], hidden: boolean) {
+  if (process.platform !== 'win32' || paths.length === 0) return 0
+  const listFile = path.join(app.getPath('temp'), `deskfield-attrib-${process.pid}.txt`)
+  try {
+    writeFileSync(listFile, paths.join('\n'), 'utf8')
+    const op = hidden
+      ? '$i.Attributes = $i.Attributes -bor [IO.FileAttributes]::Hidden'
+      : '$i.Attributes = $i.Attributes -band -bnot [IO.FileAttributes]::Hidden'
+    execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$ErrorActionPreference='SilentlyContinue';` +
+          `Get-Content -LiteralPath '${listFile}' -Encoding UTF8 | ForEach-Object {` +
+          `if ($_ -ne '') { $i = Get-Item -LiteralPath $_ -Force; if ($i) { ${op} } } }`,
+      ],
+      { stdio: 'ignore', windowsHide: true, timeout: 8000 },
+    )
+    return paths.length
+  } catch (error) {
+    log(`숨김 일괄 처리 실패(${hidden ? '숨김' : '복원'}): ${error}`)
+    return 0
+  } finally {
+    try {
+      unlinkSync(listFile)
+    } catch {
+      /* 임시 파일 정리 실패는 무시 */
+    }
+  }
+}
+
+/** 상태 파일에 담긴, 바탕화면 바로 아래의 실제 경로들 */
+function hiddenCandidates(): string[] {
+  try {
+    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as {
+      fields?: { portal?: string; items?: { path?: string }[] }[]
+    }
+    const roots = desktopRoots().map((root) => root.toLowerCase())
+    const out: string[] = []
+    for (const field of raw?.fields ?? []) {
+      // 포털 필드는 폴더를 비추기만 할 뿐 숨기지 않는다
+      if (field?.portal) continue
+      for (const item of field?.items ?? []) {
+        const target = item?.path
+        if (typeof target !== 'string' || target.startsWith('shell:')) continue
+        if (!roots.includes(path.dirname(target).toLowerCase())) continue
+        out.push(target)
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/**
  * 종료할 때 숨겨둔 바탕화면 원본을 전부 되살린다.
  * 숨김은 '앱이 켜져 있는 동안'만 유지되는 상태다 — 앱이 없으면 바탕화면은
  * 원래 모습이어야 하고, 다시 켜면 마지막 배치 기준으로 다시 숨긴다.
  * 동기로 처리하는 이유: 종료 직전이라 비동기 작업은 완료를 보장 못 한다.
  */
-function unhideAllSync() {
-  if (process.platform !== 'win32') return
-  try {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as {
-      fields?: { items?: { path?: string }[] }[]
-    }
-    const roots = desktopRoots().map((root) => root.toLowerCase())
-    let count = 0
-    for (const field of raw?.fields ?? []) {
-      for (const item of field?.items ?? []) {
-        const target = item?.path
-        if (typeof target !== 'string' || target.startsWith('shell:')) continue
-        if (!roots.includes(path.dirname(target).toLowerCase())) continue
-        try {
-          execFileSync('attrib', ['-h', target], { stdio: 'ignore' })
-          count += 1
-        } catch {
-          // 이미 지워진 파일 등 — 다음 항목으로
-        }
-      }
-    }
-    log(`종료: 숨겨둔 원본 ${count}개 다시 표시`)
-  } catch {
-    // 상태 파일이 없으면 되살릴 것도 없다
-  }
+let restored = false
+
+function unhideAllSync(reason: string) {
+  if (process.platform !== 'win32' || restored) return
+  restored = true
+  const targets = hiddenCandidates()
+  const count = setHiddenBatchSync(targets, false)
+  log(`${reason}: 숨겨둔 원본 ${count}/${targets.length}개 다시 표시`)
 }
 
 app.on('before-quit', () => {
   quitting = true
-  unhideAllSync()
+  unhideAllSync('종료')
 })
+
 
 app.on('will-quit', () => globalShortcut.unregisterAll())

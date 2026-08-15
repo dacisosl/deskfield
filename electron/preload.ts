@@ -17,6 +17,7 @@ const commands = [
   'cmd:scan',
   'cmd:settings',
   'cmd:toggle-bar',
+  'cmd:unhide-all',
 ] as const
 
 export type Command = (typeof commands)[number]
@@ -48,6 +49,8 @@ const api = {
   open: (target: string) => ipcRenderer.invoke('shell:open', target) as Promise<string | null>,
   setHidden: (target: string, hidden: boolean) =>
     ipcRenderer.invoke('fs:setHidden', target, hidden) as Promise<boolean>,
+  setHiddenBatch: (paths: string[], hidden: boolean) =>
+    ipcRenderer.invoke('fs:setHiddenBatch', paths, hidden) as Promise<number>,
 
   moveInto: (src: string, destDir: string) =>
     ipcRenderer.invoke('fs:moveInto', src, destDir) as Promise<{

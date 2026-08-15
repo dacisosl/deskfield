@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { ConfirmDialog } from './ConfirmDialog'
 import type { Settings } from '../lib/types'
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
   const [autostart, setAutostart] = useState(false)
   const [version, setVersion] = useState('')
+  const [confirmOff, setConfirmOff] = useState(false)
 
   useEffect(() => {
     api.getAutostart().then(setAutostart)
@@ -107,10 +109,31 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
             <input
               type="checkbox"
               checked={autostart}
-              onChange={async (e) => setAutostart(await api.setAutostart(e.target.checked))}
+              onChange={async (e) => {
+                // 끄는 건 확인을 받는다 — 앱이 안 켜지면 필드가 아예 보이지 않는다.
+                if (!e.target.checked) {
+                  setConfirmOff(true)
+                  return
+                }
+                setAutostart(await api.setAutostart(true))
+              }}
             />
-            <span>윈도우 시작할 때 자동 실행</span>
+            <span>
+              윈도우 시작할 때 자동 실행 <b className="df-tag">권장</b>
+              <small className="df-sub">
+                필드는 이 앱이 켜져 있을 때만 보입니다. 꺼두면 컴퓨터를 켤 때마다 직접
+                실행해야 합니다.
+              </small>
+            </span>
           </label>
+
+          {!autostart && (
+            <p className="df-warn">
+              ⚠ 자동 실행이 꺼져 있습니다. 컴퓨터를 켠 뒤 <b>바탕 필드를 직접 실행</b>해야
+              필드가 나타납니다. 실행 전까지는 바탕화면이 원래 상태(모든 아이콘이 보이는
+              상태)로 표시됩니다.
+            </p>
+          )}
 
           <div className="df-row df-row--btns">
             <button type="button" className="df-btn df-btn--ghost" onClick={onTidy}>
@@ -139,6 +162,23 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
           </button>
         </footer>
       </div>
+
+      {confirmOff && (
+        <ConfirmDialog
+          title="자동 실행을 끌까요?"
+          body={
+            '바탕 필드는 켜져 있을 때만 필드를 그립니다.\n' +
+            '자동 실행을 끄면 컴퓨터를 켤 때마다 이 앱을 직접 실행해야 필드가 나타납니다.\n\n' +
+            '앱이 꺼져 있는 동안에는 필드에 담아둔 파일도 바탕화면에 그대로 보입니다 — ' +
+            '파일이 사라지지는 않습니다.'
+          }
+          confirmLabel="그래도 끄기"
+          cancelLabel="켜 두기"
+          danger
+          onConfirm={async () => setAutostart(await api.setAutostart(false))}
+          onClose={() => setConfirmOff(false)}
+        />
+      )}
     </div>
   )
 }
