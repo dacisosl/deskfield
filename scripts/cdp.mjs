@@ -12,6 +12,12 @@ export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** 저장된 필드 배치를 비운다 — 확인 스크립트를 같은 조건에서 돌리려고. */
 export function resetState() {
+  // 앞선 실행이 남긴 앱이 살아 있으면 지운 파일을 도로 저장한다. 먼저 정리.
+  try {
+    execSync('pkill -9 -f "remote-debugging-port=9333" || true', { stdio: 'ignore' })
+  } catch {
+    /* 없으면 그만 */
+  }
   const roots = {
     linux: path.join(homedir(), '.config', 'DeskField'),
     darwin: path.join(homedir(), 'Library', 'Application Support', 'DeskField'),

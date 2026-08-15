@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -42,7 +43,7 @@ interface Props {
   raised: boolean
 }
 
-export function FieldBox({
+export const FieldBox = memo(function FieldBox({
   field,
   settings,
   bounds,
@@ -180,7 +181,11 @@ export function FieldBox({
         height: field.collapsed ? HEADER_H : field.h,
         zIndex: raised ? 3 : 1,
         background: rgba(tone.base, settings.opacity),
-        borderColor: rgba('#FFFFFF', Math.min(0.75, settings.opacity + 0.2)),
+        // 흰 필드는 흰 테두리가 안 보여서 옅은 회색으로 윤곽만 잡아준다.
+        borderColor:
+          field.color === 'white'
+            ? 'rgba(178, 178, 194, 0.55)'
+            : rgba('#FFFFFF', Math.min(0.75, settings.opacity + 0.2)),
         color: tone.ink,
       }}
       onContextMenu={(event) => {
@@ -207,7 +212,9 @@ export function FieldBox({
           spellCheck={false}
           style={{ color: tone.ink }}
           onChange={(event) => patch({ title: event.target.value })}
-          // 이 창은 평소 포커스를 받지 않는다. 입력하는 동안만 잠깐 열어준다.
+          // 이 창은 평소 포커스를 받지 않아서, 누르는 순간 먼저 열어줘야
+          // Windows에서도 키보드 입력이 들어온다.
+          onPointerDown={() => api.setFocusable(true)}
           onFocus={() => api.setFocusable(true)}
           onBlur={() => api.setFocusable(false)}
           onKeyDown={(event) => {
@@ -259,6 +266,8 @@ export function FieldBox({
           onDragLeave={() => setDropAt(null)}
           onDrop={(event) => {
             event.preventDefault()
+            // 루트의 '필드에서 빼기' 드롭 처리까지 올라가면 넣자마자 빠진다.
+            event.stopPropagation()
             onRaise(id)
             const index = dropAt ?? field.items.length
             setDropAt(null)
@@ -309,4 +318,4 @@ export function FieldBox({
         ))}
     </section>
   )
-}
+})

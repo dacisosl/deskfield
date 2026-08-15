@@ -18,6 +18,8 @@ win:
   icon: build/icon.png
   # 실행 파일명은 영문으로 — 한글 exe 이름이 만들 수 있는 변수를 없앤다.
   executableName: DeskField
+  # zip 파일명도 영문으로 (GitHub 릴리스가 한글 파일명을 잘라먹는다)
+  artifactName: DeskField-${version}-win.${ext}
 
 nsis:
   artifactName: DeskField-Setup-${version}.${ext}

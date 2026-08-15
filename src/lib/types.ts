@@ -5,6 +5,8 @@ export interface FieldItem {
   path: string
   name: string
   kind: ItemKind
+  /** 사용자가 고른 아이콘(이모지). 있으면 OS 아이콘 대신 이걸 그린다. */
+  emoji?: string
   /** 경로가 사라진 항목. 지우지 않고 흐리게 표시해서 사용자가 직접 정리하게 둔다. */
   missing?: boolean
 }
@@ -34,6 +36,10 @@ export interface Settings {
   snap: boolean
   /** 항목 이름 표시 */
   labels: boolean
+  /** 필드에 담은 항목의 바탕화면 원본을 숨겨 '이동'처럼 보이게 한다 */
+  hideOriginals: boolean
+  /** 오른쪽 아래 도구 막대 표시 여부 — 꺼도 트레이 메뉴로 전부 가능 */
+  showBar: boolean
 }
 
 export interface AppState {
@@ -48,6 +54,8 @@ export const DEFAULT_SETTINGS: Settings = {
   locked: false,
   snap: true,
   labels: true,
+  hideOriginals: true,
+  showBar: true,
 }
 
 export const MIN_W = 200

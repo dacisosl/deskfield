@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ContextMenu, type MenuSpec } from './components/ContextMenu'
+import { EmojiPicker } from './components/EmojiPicker'
 import { FieldBox } from './components/FieldBox'
 import { ScanReview, type ScanResult } from './components/ScanReview'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -7,7 +8,7 @@ import { Toolbar } from './components/Toolbar'
 import { usePassthrough } from './hooks/usePassthrough'
 import { api } from './lib/api'
 import { clamp, snapTo } from './lib/layout'
-import { MIN_H, MIN_W, type Field, type FieldItem } from './lib/types'
+import { MIN_H, MIN_W, type Field, type FieldItem, type Settings } from './lib/types'
 import { useFields } from './state/useFields'
 
 interface Draft {
@@ -20,10 +21,14 @@ interface Draft {
 export default function App() {
   const {
     state,
+    stateRef,
     loaded,
     addField,
     patchField,
     removeField,
+    clearField,
+    addSpecial,
+    updateItem,
     addPaths,
     moveItem,
     removeItems,
@@ -41,9 +46,10 @@ export default function App() {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [frontId, setFrontId] = useState<string | null>(null)
+  const [pickerFor, setPickerFor] = useState<FieldItem | null>(null)
   const draftStart = useRef<{ x: number; y: number } | null>(null)
 
-  const modalOpen = scanning || showSettings
+  const modalOpen = scanning || showSettings || !!pickerFor
   usePassthrough(editing || gesture || modalOpen || !!menu)
 
   useEffect(() => {
@@ -77,8 +83,9 @@ export default function App() {
       if (command === 'cmd:new-field') newField()
       if (command === 'cmd:scan') setScanning(true)
       if (command === 'cmd:settings') setShowSettings(true)
+      if (command === 'cmd:toggle-bar') setSettings({ showBar: !stateRef.current.settings.showBar })
     })
-  }, [newField])
+  }, [newField, setSettings, stateRef])
 
   useEffect(() => {
     return api.onWorkAreaChange((rect) => setBounds({ w: rect.width, h: rect.height }))
@@ -120,6 +127,22 @@ export default function App() {
     [addField, addPaths, bounds],
   )
 
+  /** '원본 숨기기'를 켜고 끄면 이미 담아둔 항목 전체에 즉시 반영한다. */
+  const changeSettings = useCallback(
+    (patch: Partial<Settings>) => {
+      if ('hideOriginals' in patch) {
+        const hide = !!patch.hideOriginals
+        for (const field of state.fields) {
+          for (const item of field.items) {
+            if (!item.path.startsWith('shell:')) void api.setHidden(item.path, hide)
+          }
+        }
+      }
+      setSettings(patch)
+    },
+    [setSettings, state.fields],
+  )
+
   const tidy = useCallback(() => {
     const gapX = 24
     const gapY = 24
@@ -142,7 +165,7 @@ export default function App() {
     setShowSettings(false)
   }, [bounds.h, bounds.w, replaceFields])
 
-  function fieldMenu(field: Field, x: number, y: number) {
+  const fieldMenu = useCallback((field: Field, x: number, y: number) => {
     setMenu({
       x,
       y,
@@ -162,6 +185,11 @@ export default function App() {
             if (paths.length) await addPaths(field.id, paths)
           },
         },
+        {
+          label: '휴지통 타일 추가',
+          onSelect: () =>
+            addSpecial(field.id, { path: 'shell:RecycleBin', name: '휴지통', kind: 'file', emoji: '🗑️' }),
+        },
         { label: '', separator: true },
         { label: '이름순 정렬', onSelect: () => sortField(field.id, 'name') },
         { label: '폴더 먼저 정렬', onSelect: () => sortField(field.id, 'kind') },
@@ -173,25 +201,35 @@ export default function App() {
         { label: '', separator: true },
         {
           label: '항목 모두 비우기',
-          onSelect: () => patchField(field.id, { items: [] }),
+          onSelect: () => clearField(field.id),
         },
         { label: '필드 삭제', danger: true, onSelect: () => removeField(field.id) },
       ],
     })
-  }
+  }, [addPaths, addSpecial, clearField, patchField, removeField, sortField])
 
-  function itemMenu(item: FieldItem, x: number, y: number) {
+  const itemMenu = useCallback((item: FieldItem, x: number, y: number) => {
+    const special = item.path.startsWith('shell:')
     setMenu({
       x,
       y,
       entries: [
         { label: '열기', onSelect: () => void openItem(item) },
-        { label: '파일 위치 열기', onSelect: () => void api.reveal(item.path) },
+        ...(special
+          ? []
+          : [{ label: '파일 위치 열기', onSelect: () => void api.reveal(item.path) }]),
+        { label: '', separator: true },
+        { label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) },
         { label: '', separator: true },
         { label: '필드에서 빼기', danger: true, onSelect: () => removeItems([item.id]) },
       ],
     })
-  }
+  }, [openItem, removeItems])
+
+  const dropPaths = useCallback(
+    (id: string, paths: string[], index: number) => void addPaths(id, paths, index),
+    [addPaths],
+  )
 
   /** 편집 모드에서 빈 곳을 끌면 그 크기대로 새 필드를 만든다. */
   function startDraft(event: ReactPointerEvent<HTMLDivElement>) {
@@ -232,6 +270,20 @@ export default function App() {
       onPointerMove={moveDraft}
       onPointerUp={endDraft}
       onPointerCancel={endDraft}
+      onDragOver={(event) => {
+        // 필드 밖으로 끌고 나온 타일 — 놓으면 필드에서 뺀다
+        if (event.dataTransfer.types.includes('application/x-deskfield-item')) {
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+        }
+      }}
+      onDrop={(event) => {
+        const itemId = event.dataTransfer.getData('application/x-deskfield-item')
+        if (!itemId) return
+        event.preventDefault()
+        removeItems([itemId])
+        setToast('필드에서 뺐어요 — 바탕화면에 다시 보입니다')
+      }}
     >
       {state.fields.map((field) => (
         <FieldBox
@@ -243,7 +295,7 @@ export default function App() {
           onOpen={openItem}
           onItemMenu={itemMenu}
           onFieldMenu={fieldMenu}
-          onDropPaths={(id, paths, index) => void addPaths(id, paths, index)}
+          onDropPaths={dropPaths}
           onMoveItem={moveItem}
           onGesture={setGesture}
           onRaise={setFrontId}
@@ -261,6 +313,7 @@ export default function App() {
         </p>
       )}
 
+      {state.settings.showBar && (
       <Toolbar
         editing={editing}
         locked={state.settings.locked}
@@ -270,6 +323,7 @@ export default function App() {
         onToggleLock={() => setSettings({ locked: !state.settings.locked })}
         onSettings={() => setShowSettings(true)}
       />
+      )}
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
 
@@ -280,9 +334,18 @@ export default function App() {
       {showSettings && (
         <SettingsPanel
           settings={state.settings}
-          onChange={setSettings}
+          onChange={changeSettings}
           onClose={() => setShowSettings(false)}
           onTidy={tidy}
+        />
+      )}
+
+      {pickerFor && (
+        <EmojiPicker
+          showReset={!!pickerFor.emoji}
+          onPick={(emoji) => updateItem(pickerFor.id, { emoji })}
+          onReset={() => updateItem(pickerFor.id, { emoji: undefined })}
+          onClose={() => setPickerFor(null)}
         />
       )}
 

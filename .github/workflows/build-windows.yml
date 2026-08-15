@@ -45,7 +45,7 @@ jobs:
           body: |
             ### 받는 방법 (권장 순서)
 
-            1. **`바탕 필드-${{ steps.meta.outputs.version }}-win.zip`** — 압축을 풀고 `DeskField.exe` 실행. 설치 과정이 없어 보안 프로그램에 막힐 단계가 가장 적습니다.
+            1. **`DeskField-${{ steps.meta.outputs.version }}-win.zip`** — 압축을 풀고 `DeskField.exe` 실행. 설치 과정이 없어 보안 프로그램에 막힐 단계가 가장 적습니다. **(권장 — 확실하게 실행되는 방식)**
             2. `DeskField-Setup-${{ steps.meta.outputs.version }}.exe` — 설치판 (바탕화면·시작 메뉴 바로가기 생성)
             3. `DeskField-${{ steps.meta.outputs.version }}-portable.exe` — 무설치 단일 실행 파일
 

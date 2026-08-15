@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { nextColor } from '../lib/palette'
 import {
   DEFAULT_SETTINGS,
   MIN_H,
@@ -11,6 +10,10 @@ import {
   type Settings,
   uid,
 } from '../lib/types'
+
+function isReal(item: Pick<FieldItem, 'path'>) {
+  return !item.path.startsWith('shell:')
+}
 
 const EMPTY: AppState = { version: 1, fields: [], settings: DEFAULT_SETTINGS }
 
@@ -78,7 +81,7 @@ export function useFields() {
           items: await Promise.all(
             field.items.map(async (item) => ({
               ...item,
-              missing: !(await api.exists(item.path)),
+              missing: isReal(item) ? !(await api.exists(item.path)) : false,
             })),
           ),
         })),
@@ -138,7 +141,7 @@ export function useFields() {
               collapsed: false,
               autoGrow: true,
               items: [],
-              color: nextColor(prev.fields.map((field) => field.color)),
+              color: 'white',
               ...init,
               w,
               h,
@@ -154,7 +157,43 @@ export function useFields() {
   )
 
   const removeField = useCallback((id: string) => {
+    const target = stateRef.current.fields.find((field) => field.id === id)
+    target?.items.filter(isReal).forEach((item) => void api.setHidden(item.path, false))
     setState((prev) => ({ ...prev, fields: prev.fields.filter((field) => field.id !== id) }))
+  }, [])
+
+  /** 항목을 비우면 바탕화면 원본도 다시 보여준다. */
+  const clearField = useCallback((id: string) => {
+    const target = stateRef.current.fields.find((field) => field.id === id)
+    target?.items.filter(isReal).forEach((item) => void api.setHidden(item.path, false))
+    setState((prev) => ({
+      ...prev,
+      fields: prev.fields.map((field) => (field.id === id ? { ...field, items: [] } : field)),
+    }))
+  }, [])
+
+  /** 휴지통처럼 파일 경로가 없는 특수 타일 */
+  const addSpecial = useCallback((fieldId: string, item: Omit<FieldItem, 'id'>) => {
+    setState((prev) => {
+      // 같은 특수 타일이 이미 있으면 중복으로 만들지 않는다.
+      if (prev.fields.some((field) => field.items.some((it) => it.path === item.path))) return prev
+      return {
+        ...prev,
+        fields: prev.fields.map((field) =>
+          field.id === fieldId ? { ...field, items: [...field.items, { ...item, id: uid() }] } : field,
+        ),
+      }
+    })
+  }, [])
+
+  const updateItem = useCallback((itemId: string, patch: Partial<FieldItem>) => {
+    setState((prev) => ({
+      ...prev,
+      fields: prev.fields.map((field) => ({
+        ...field,
+        items: field.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
+      })),
+    }))
   }, [])
 
   /** 경로들을 필드에 넣는다. 다른 필드에 있던 항목은 옮겨온다(복제하지 않는다). */
@@ -172,6 +211,10 @@ export function useFields() {
       })
     }
     if (resolved.length === 0) return
+
+    if (stateRef.current.settings.hideOriginals) {
+      resolved.filter(isReal).forEach((item) => void api.setHidden(item.path, true))
+    }
 
     setState((prev) => {
       const keys = new Set(resolved.map((item) => item.path.toLowerCase()))
@@ -228,6 +271,11 @@ export function useFields() {
 
   const removeItems = useCallback((ids: string[]) => {
     const drop = new Set(ids)
+    for (const field of stateRef.current.fields) {
+      for (const item of field.items) {
+        if (drop.has(item.id) && isReal(item)) void api.setHidden(item.path, false)
+      }
+    }
     setState((prev) => ({
       ...prev,
       fields: prev.fields.map((field) => ({
@@ -266,6 +314,9 @@ export function useFields() {
     addField,
     patchField,
     removeField,
+    clearField,
+    addSpecial,
+    updateItem,
     addPaths,
     moveItem,
     removeItems,

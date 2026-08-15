@@ -10,6 +10,7 @@ import {
   screen,
   shell,
 } from 'electron'
+import { execFile, spawn } from 'node:child_process'
 import { appendFileSync, mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -280,7 +281,17 @@ function registerIpc() {
     const cached = iconCache.get(target)
     if (cached) return cached
     try {
-      const image = await app.getFileIcon(target, { size: 'large' })
+      // 바로가기는 자기 자신이 아니라 가리키는 대상의 아이콘을 써야 자연스럽다.
+      let source = target
+      if (process.platform === 'win32' && target.toLowerCase().endsWith('.lnk')) {
+        try {
+          const link = shell.readShortcutLink(target)
+          if (link.target) source = link.target
+        } catch {
+          // 해석 못 하면 원본으로
+        }
+      }
+      const image = await app.getFileIcon(source, { size: 'large' })
       const url = image.toDataURL()
       iconCache.set(target, url)
       return url
@@ -290,8 +301,29 @@ function registerIpc() {
   })
 
   ipcMain.handle('shell:open', async (_e, target: string) => {
+    // 휴지통 같은 가상 개체는 파일 경로가 없어 탐색기에 맡긴다.
+    if (target.startsWith('shell:')) {
+      if (process.platform === 'win32') {
+        spawn('explorer.exe', [target], { detached: true, stdio: 'ignore' }).unref()
+      }
+      return null
+    }
     const error = await shell.openPath(target)
     return error || null
+  })
+
+  /**
+   * 바탕화면 원본 숨기기/보이기 — '이동처럼 보이기'의 실체.
+   * 파일을 옮기지 않고 숨김 속성만 걸어서, 무슨 일이 생겨도 파일은 제자리에 있다.
+   * 안전장치로 바탕화면 바로 아래 항목에만 적용한다.
+   */
+  ipcMain.handle('fs:setHidden', async (_e, target: string, hidden: boolean) => {
+    if (process.platform !== 'win32' || target.startsWith('shell:')) return false
+    const parent = path.dirname(target).toLowerCase()
+    if (!desktopRoots().some((root) => root.toLowerCase() === parent)) return false
+    return await new Promise<boolean>((resolve) => {
+      execFile('attrib', [hidden ? '+h' : '-h', target], (error) => resolve(!error))
+    })
   })
 
   ipcMain.handle('shell:reveal', (_e, target: string) => {
@@ -350,6 +382,7 @@ function buildTray() {
     { type: 'separator' },
     { label: '새 필드 만들기', click: () => win?.webContents.send('cmd:new-field') },
     { label: '바탕화면 자동 정리…', click: () => win?.webContents.send('cmd:scan') },
+    { label: '도구 막대 보이기/숨기기', click: () => win?.webContents.send('cmd:toggle-bar') },
     { label: '설정 열기', click: () => win?.webContents.send('cmd:settings') },
     { type: 'separator' },
     {

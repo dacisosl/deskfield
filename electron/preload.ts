@@ -16,6 +16,7 @@ const commands = [
   'cmd:new-field',
   'cmd:scan',
   'cmd:settings',
+  'cmd:toggle-bar',
 ] as const
 
 export type Command = (typeof commands)[number]
@@ -35,6 +36,8 @@ const api = {
   getIcon: (target: string) => ipcRenderer.invoke('icon:get', target) as Promise<string | null>,
 
   open: (target: string) => ipcRenderer.invoke('shell:open', target) as Promise<string | null>,
+  setHidden: (target: string, hidden: boolean) =>
+    ipcRenderer.invoke('fs:setHidden', target, hidden) as Promise<boolean>,
   reveal: (target: string) => ipcRenderer.invoke('shell:reveal', target) as Promise<void>,
   pick: (mode: 'file' | 'folder') => ipcRenderer.invoke('dialog:pick', mode) as Promise<string[]>,
 

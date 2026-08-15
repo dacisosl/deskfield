@@ -8,6 +8,7 @@ export interface Pastel {
 }
 
 export const PALETTE: Pastel[] = [
+  { key: 'white', label: '화이트', base: '#FFFFFF', ink: '#4A4A55' },
   { key: 'lavender', label: '라벤더', base: '#DCD6F2', ink: '#453C63' },
   { key: 'mint', label: '민트', base: '#CFE9DE', ink: '#2F5449' },
   { key: 'sky', label: '스카이', base: '#D4E4F4', ink: '#2E4A63' },

@@ -35,7 +35,12 @@ export function ContextMenu({ menu, onClose }: Props) {
   }, [menu.x, menu.y])
 
   useEffect(() => {
-    const close = () => onClose()
+    // 캡처 단계라 메뉴 자신을 클릭해도 먼저 실행된다 — 메뉴 안이면 닫지 않아야
+    // 항목의 onSelect가 실행될 기회를 얻는다.
+    const close = (event: PointerEvent) => {
+      if (ref.current?.contains(event.target as Node)) return
+      onClose()
+    }
     window.addEventListener('pointerdown', close, true)
     return () => window.removeEventListener('pointerdown', close, true)
   }, [onClose])

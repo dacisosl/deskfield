@@ -53,6 +53,30 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
           <label className="df-row df-row--check">
             <input
               type="checkbox"
+              checked={settings.hideOriginals}
+              onChange={(e) => onChange({ hideOriginals: e.target.checked })}
+            />
+            <span>
+              필드에 담으면 바탕화면 원본 숨기기
+              <small className="df-sub">파일은 옮기지 않고 숨김 표시만 합니다. 필드에서 빼면 다시 보입니다.</small>
+            </span>
+          </label>
+
+          <label className="df-row df-row--check">
+            <input
+              type="checkbox"
+              checked={settings.showBar}
+              onChange={(e) => onChange({ showBar: e.target.checked })}
+            />
+            <span>
+              오른쪽 아래 도구 막대 표시
+              <small className="df-sub">꺼도 트레이 아이콘 우클릭으로 모든 기능을 쓸 수 있습니다.</small>
+            </span>
+          </label>
+
+          <label className="df-row df-row--check">
+            <input
+              type="checkbox"
               checked={settings.labels}
               onChange={(e) => onChange({ labels: e.target.checked })}
             />
