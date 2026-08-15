@@ -10,7 +10,7 @@ import {
   screen,
   shell,
 } from 'electron'
-import { promises as fs } from 'node:fs'
+import { appendFileSync, mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,6 +22,37 @@ app.setName('DeskField')
 
 /** 필드 배치는 여기에 저장된다 (Windows: %APPDATA%\DeskField\state.json). */
 const STATE_FILE = path.join(app.getPath('userData'), 'state.json')
+
+/**
+ * 시작 과정을 파일에 남긴다. 창이 안 뜨는 상황은 화면에 아무것도 없어서
+ * 사용자 쪽에서 원인을 알 방법이 이 로그밖에 없다.
+ */
+const LOG_FILE = path.join(app.getPath('userData'), 'startup.log')
+
+function log(message: string) {
+  const line = `${new Date().toISOString()}  ${message}`
+  try {
+    mkdirSync(path.dirname(LOG_FILE), { recursive: true })
+    appendFileSync(LOG_FILE, `${line}\n`)
+  } catch {
+    // 로그를 못 써도 앱은 계속 떠야 한다.
+  }
+  console.log(line)
+}
+
+// 조용히 죽지 않게 — 무슨 일이 있었는지 남기고 사용자에게도 알린다.
+process.on('uncaughtException', (error: Error) => {
+  log(`치명적 오류: ${error?.stack ?? error}`)
+  try {
+    dialog.showErrorBox('바탕 필드 오류', `${error?.message ?? error}\n\n로그: ${LOG_FILE}`)
+  } catch {
+    // 창을 띄울 수 없는 단계면 로그만 남는다.
+  }
+})
+
+process.on('unhandledRejection', (reason) => log(`처리되지 않은 거부: ${reason}`))
+
+log(`--- 시작 (electron ${process.versions.electron}, ${process.platform} ${process.arch}) ---`)
 
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -59,8 +90,9 @@ function createWindow() {
     fullscreenable: false,
     skipTaskbar: true,
     hasShadow: false,
-    // 포커스를 뺏지 않아야 일반 창들 아래(= 바탕화면 층)에 자연스럽게 머문다.
-    focusable: false,
+    // 포커스를 뺏지 않는 건 창을 띄운 뒤에 건다. Windows에서는 focusable:false로
+    // 만든 창이 show()에 반응하지 않고 그대로 숨어 있는 경우가 있다.
+    focusable: true,
     show: false,
     acceptFirstMouse: true,
     webPreferences: {
@@ -89,7 +121,40 @@ function createWindow() {
     win.loadFile(resolveIndex())
   }
 
-  win.once('ready-to-show', () => win?.showInactive())
+  win.webContents.on('did-finish-load', () => {
+    log('렌더러 로드 완료')
+    reveal()
+  })
+
+  win.webContents.on('did-fail-load', (_e, code, description, url) => {
+    log(`렌더러 로드 실패: ${code} ${description} (${url})`)
+    dialog.showErrorBox('바탕 필드', `화면을 불러오지 못했습니다.\n${description}\n\n로그: ${LOG_FILE}`)
+  })
+
+  win.webContents.on('render-process-gone', (_e, details) => {
+    log(`렌더러 프로세스 종료: ${details.reason}`)
+  })
+
+  win.once('ready-to-show', () => {
+    log('ready-to-show')
+    reveal()
+  })
+
+  // 어떤 이벤트도 오지 않는 경우를 대비한 마지막 방어선.
+  setTimeout(() => {
+    if (!win?.isVisible()) {
+      log('이벤트가 오지 않아 강제로 창을 띄운다')
+      reveal()
+    }
+  }, 5000)
+}
+
+/** 창을 띄우고 나서 포커스를 받지 않도록 바꾼다 (순서가 중요하다). */
+function reveal() {
+  if (!win || win.isDestroyed() || win.isVisible()) return
+  win.showInactive()
+  win.setFocusable(false)
+  log(`창 표시됨 visible=${win.isVisible()} bounds=${JSON.stringify(win.getBounds())}`)
 }
 
 function showWindow() {
@@ -311,8 +376,18 @@ app.whenReady().then(() => {
   app.setAppUserModelId('com.dacisosl.deskfield')
 
   registerIpc()
+  log('IPC 등록 완료')
+
   createWindow()
-  buildTray()
+  log('창 생성 완료')
+
+  // 트레이는 아이콘 로드 실패로 예외를 던질 수 있다. 여기서 죽으면 단축키가 안 걸린다.
+  try {
+    buildTray()
+    log('트레이 등록 완료')
+  } catch (error) {
+    log(`트레이 등록 실패: ${error}`)
+  }
 
   globalShortcut.register('Control+Alt+D', () => win?.webContents.send('cmd:toggle-edit'))
   globalShortcut.register('Control+Alt+H', toggleVisible)
