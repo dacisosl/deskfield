@@ -351,6 +351,35 @@ body,
   z-index: 50;
 }
 
+/* ------------------------------------------------------------------ 업데이트 배너 */
+
+.df-update {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: rgba(253, 252, 255, 0.97);
+  box-shadow: 0 10px 30px rgba(35, 35, 60, 0.25);
+  font-size: 13px;
+  color: #3c3a4a;
+  z-index: 60;
+}
+
+.df-update__busy {
+  color: #6a6780;
+}
+
+.df-version {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: #8a879c;
+}
+
 /* ------------------------------------------------------------------ 메뉴 */
 
 .df-menu {

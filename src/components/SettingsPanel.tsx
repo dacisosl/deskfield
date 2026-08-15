@@ -11,9 +11,11 @@ interface Props {
 
 export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
   const [autostart, setAutostart] = useState(false)
+  const [version, setVersion] = useState('')
 
   useEffect(() => {
     api.getAutostart().then(setAutostart)
+    api.getVersion().then(setVersion)
   }, [])
 
   return (
@@ -114,9 +116,13 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
             <button type="button" className="df-btn df-btn--ghost" onClick={onTidy}>
               필드 반듯하게 배치
             </button>
+            <button type="button" className="df-btn df-btn--ghost" onClick={() => void api.checkUpdate()}>
+              업데이트 확인
+            </button>
             <button type="button" className="df-btn df-btn--ghost" onClick={() => api.quit()}>
               앱 종료
             </button>
+            {version && <span className="df-version">v{version}</span>}
           </div>
 
           <p className="df-hint">

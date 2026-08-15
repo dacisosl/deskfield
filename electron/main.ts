@@ -11,7 +11,7 @@ import {
   shell,
 } from 'electron'
 import { execFile, spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync, promises as fs } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 
 // CommonJS로 번들된다. Windows에서 asar 안의 ESM 진입점을 읽지 못하는 문제가 있어
@@ -358,10 +358,134 @@ function registerIpc() {
 
   ipcMain.handle('app:workarea', () => screen.getPrimaryDisplay().workArea)
 
+  ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('update:check', () => checkForUpdate(true))
+  ipcMain.handle('update:apply', () => applyUpdate())
+
   ipcMain.on('app:quit', () => {
     quitting = true
     app.quit()
   })
+}
+
+/* ------------------------------------------------------------------ 자동 업데이트 */
+
+/**
+ * zip 배포용 자체 업데이트. electron-updater는 NSIS 설치판 전용인데
+ * 이 앱은 보안 프로그램이 NSIS를 차단하는 환경 때문에 zip으로 배포한다.
+ * 릴리스 확인 → zip 내려받기 → 압축 해제 → 앱 종료 후 파일 교체 → 재실행.
+ */
+const UPDATE_REPO = 'dacisosl/deskfield'
+let updateInfo: { version: string; url: string } | null = null
+let updating = false
+
+/** a > b 이면 1 */
+function cmpVersion(a: string, b: string) {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0)
+    if (d !== 0) return d > 0 ? 1 : -1
+  }
+  return 0
+}
+
+async function checkForUpdate(manual = false) {
+  // 개발 모드/다른 OS에서는 확인만 건너뛴다 (zip 교체 스크립트가 Windows 전용).
+  if (process.platform !== 'win32' || !app.isPackaged) return
+  try {
+    const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
+      headers: { accept: 'application/vnd.github+json' },
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = (await res.json()) as {
+      tag_name?: string
+      assets?: { name: string; browser_download_url: string }[]
+    }
+    const latest = (data.tag_name ?? '').replace(/^v/, '')
+    const asset = data.assets?.find((a) => /^DeskField-.*-win\.zip$/i.test(a.name))
+    if (!latest || !asset) return
+
+    if (cmpVersion(latest, app.getVersion()) > 0) {
+      updateInfo = { version: latest, url: asset.browser_download_url }
+      log(`업데이트 발견: v${latest}`)
+      win?.webContents.send('update:available', latest)
+    } else if (manual) {
+      win?.webContents.send('update:none', app.getVersion())
+    }
+  } catch (error) {
+    log(`업데이트 확인 실패: ${error}`)
+  }
+}
+
+/** zip 루트 또는 한 단계 아래에서 실행 파일이 있는 폴더를 찾는다. */
+async function findAppDir(extracted: string): Promise<string | null> {
+  if (existsSync(path.join(extracted, 'DeskField.exe'))) return extracted
+  for (const entry of await fs.readdir(extracted, { withFileTypes: true })) {
+    if (entry.isDirectory() && existsSync(path.join(extracted, entry.name, 'DeskField.exe'))) {
+      return path.join(extracted, entry.name)
+    }
+  }
+  return null
+}
+
+async function applyUpdate(): Promise<boolean> {
+  if (!updateInfo || updating) return false
+  updating = true
+  try {
+    const workDir = path.join(app.getPath('temp'), 'deskfield-update')
+    await fs.rm(workDir, { recursive: true, force: true })
+    await fs.mkdir(workDir, { recursive: true })
+
+    log(`업데이트 내려받는 중: v${updateInfo.version}`)
+    const res = await fetch(updateInfo.url)
+    if (!res.ok) throw new Error(`다운로드 HTTP ${res.status}`)
+    const zipPath = path.join(workDir, 'update.zip')
+    await fs.writeFile(zipPath, Buffer.from(await res.arrayBuffer()))
+
+    const extracted = path.join(workDir, 'app')
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${extracted}' -Force`,
+        ],
+        (error) => (error ? reject(error) : resolve()),
+      )
+    })
+
+    const appDir = await findAppDir(extracted)
+    if (!appDir) throw new Error('압축 안에서 DeskField.exe를 찾지 못했다')
+
+    // 실행 중인 파일은 덮어쓸 수 없으니, 앱을 끄고 나서 스크립트가 교체·재실행한다.
+    const dest = path.dirname(app.getPath('exe'))
+    const script = path.join(workDir, 'apply.cmd')
+    await fs.writeFile(
+      script,
+      [
+        '@echo off',
+        'chcp 65001 >nul',
+        'ping -n 4 127.0.0.1 >nul',
+        `robocopy "${appDir}" "${dest}" /E /NFL /NDL /NJH /NJS /R:3 /W:1`,
+        `start "" "${path.join(dest, 'DeskField.exe')}"`,
+      ].join('\r\n'),
+      'utf8',
+    )
+    log(`업데이트 적용: ${dest} 교체 후 재시작`)
+    spawn('cmd.exe', ['/c', script], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+    quitting = true
+    app.quit()
+    return true
+  } catch (error) {
+    log(`업데이트 적용 실패: ${error}`)
+    updating = false
+    // 자동 적용이 막힌 환경이면 릴리스 페이지라도 열어준다.
+    void shell.openExternal(`https://github.com/${UPDATE_REPO}/releases/latest`)
+    return false
+  }
 }
 
 /* ------------------------------------------------------------------ 트레이 */
@@ -383,6 +507,7 @@ function buildTray() {
     { label: '새 필드 만들기', click: () => win?.webContents.send('cmd:new-field') },
     { label: '바탕화면 자동 정리…', click: () => win?.webContents.send('cmd:scan') },
     { label: '도구 막대 보이기/숨기기', click: () => win?.webContents.send('cmd:toggle-bar') },
+    { label: '업데이트 확인', click: () => void checkForUpdate(true) },
     { label: '설정 열기', click: () => win?.webContents.send('cmd:settings') },
     { type: 'separator' },
     {
@@ -425,6 +550,9 @@ app.whenReady().then(() => {
 
   globalShortcut.register('Control+Alt+D', () => win?.webContents.send('cmd:toggle-edit'))
   globalShortcut.register('Control+Alt+H', toggleVisible)
+
+  setTimeout(() => void checkForUpdate(), 8000)
+  setInterval(() => void checkForUpdate(), 6 * 60 * 60 * 1000)
 
   screen.on('display-metrics-changed', syncWorkArea)
   screen.on('display-added', syncWorkArea)

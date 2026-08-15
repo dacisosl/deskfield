@@ -57,7 +57,25 @@ const api = {
   setAutostart: (enabled: boolean) => ipcRenderer.invoke('autostart:set', enabled) as Promise<boolean>,
 
   getWorkArea: () => ipcRenderer.invoke('app:workarea') as Promise<Rect>,
+  getVersion: () => ipcRenderer.invoke('app:version') as Promise<string>,
   quit: () => ipcRenderer.send('app:quit'),
+
+  checkUpdate: () => ipcRenderer.invoke('update:check') as Promise<void>,
+  applyUpdate: () => ipcRenderer.invoke('update:apply') as Promise<boolean>,
+  onUpdateAvailable: (handler: (version: string) => void) => {
+    const listener = (_e: unknown, version: string) => handler(version)
+    ipcRenderer.on('update:available', listener)
+    return () => {
+      ipcRenderer.off('update:available', listener)
+    }
+  },
+  onUpdateNone: (handler: (version: string) => void) => {
+    const listener = (_e: unknown, version: string) => handler(version)
+    ipcRenderer.on('update:none', listener)
+    return () => {
+      ipcRenderer.off('update:none', listener)
+    }
+  },
 
   onCommand: (handler: (command: Command) => void) => {
     const listeners = commands.map((command) => {

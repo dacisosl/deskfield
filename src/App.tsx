@@ -47,6 +47,8 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [frontId, setFrontId] = useState<string | null>(null)
   const [pickerFor, setPickerFor] = useState<FieldItem | null>(null)
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null)
+  const [updateBusy, setUpdateBusy] = useState(false)
   const draftStart = useRef<{ x: number; y: number } | null>(null)
 
   const modalOpen = scanning || showSettings || !!pickerFor
@@ -89,6 +91,15 @@ export default function App() {
 
   useEffect(() => {
     return api.onWorkAreaChange((rect) => setBounds({ w: rect.width, h: rect.height }))
+  }, [])
+
+  useEffect(() => {
+    const offAvailable = api.onUpdateAvailable((version) => setUpdateVersion(version))
+    const offNone = api.onUpdateNone(() => setToast('지금이 최신 버전이에요'))
+    return () => {
+      offAvailable()
+      offNone()
+    }
   }, [])
 
   // 해상도가 바뀌면 화면 밖으로 나간 필드를 안으로 끌어온다.
@@ -352,6 +363,38 @@ export default function App() {
       {toast && (
         <div className="df-toast" data-solid>
           {toast}
+        </div>
+      )}
+
+      {updateVersion && (
+        <div className="df-update" data-solid>
+          <span>
+            새 버전 <b>v{updateVersion}</b>이 나왔어요
+          </span>
+          {updateBusy ? (
+            <span className="df-update__busy">내려받는 중… 잠시 후 자동으로 다시 켜집니다</span>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="df-btn df-btn--go"
+                onClick={async () => {
+                  setUpdateBusy(true)
+                  const ok = await api.applyUpdate()
+                  if (!ok) {
+                    setUpdateBusy(false)
+                    setToast('자동 적용에 실패해서 다운로드 페이지를 열었어요')
+                    setUpdateVersion(null)
+                  }
+                }}
+              >
+                지금 업데이트
+              </button>
+              <button type="button" className="df-btn df-btn--ghost" onClick={() => setUpdateVersion(null)}>
+                나중에
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
