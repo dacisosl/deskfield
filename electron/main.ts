@@ -12,9 +12,10 @@ import {
 } from 'electron'
 import { appendFileSync, mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const dirname = path.dirname(fileURLToPath(import.meta.url))
+// CommonJS로 번들된다. Windows에서 asar 안의 ESM 진입점을 읽지 못하는 문제가 있어
+// 메인 프로세스는 CJS로 고정한다 (__dirname을 그대로 쓸 수 있다).
+const dirname = __dirname
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 
 // 이름을 먼저 못 박는다. 이걸 빼면 설정/캐시가 사용자 폴더에 그대로 흩어진다.

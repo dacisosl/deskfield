@@ -1,12 +1,12 @@
 {
   "name": "deskfield",
   "productName": "바탕 필드",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "바탕 필드 — 바탕화면 정리",
   "author": "dacisosl",
   "license": "MIT",
-  "main": "dist/electron/main.js",
+  "main": "dist/electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
