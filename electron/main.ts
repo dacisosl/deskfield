@@ -10,8 +10,8 @@ import {
   screen,
   shell,
 } from 'electron'
-import { execFile, spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, promises as fs } from 'node:fs'
+import { execFile, execFileSync, spawn } from 'node:child_process'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 
 // CommonJS로 번들된다. Windows에서 asar 안의 ESM 진입점을 읽지 못하는 문제가 있어
@@ -563,8 +563,42 @@ app.on('window-all-closed', () => {
   // 트레이에 남는 앱이라 창이 닫혀도 종료하지 않는다.
 })
 
+/**
+ * 종료할 때 숨겨둔 바탕화면 원본을 전부 되살린다.
+ * 숨김은 '앱이 켜져 있는 동안'만 유지되는 상태다 — 앱이 없으면 바탕화면은
+ * 원래 모습이어야 하고, 다시 켜면 마지막 배치 기준으로 다시 숨긴다.
+ * 동기로 처리하는 이유: 종료 직전이라 비동기 작업은 완료를 보장 못 한다.
+ */
+function unhideAllSync() {
+  if (process.platform !== 'win32') return
+  try {
+    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as {
+      fields?: { items?: { path?: string }[] }[]
+    }
+    const roots = desktopRoots().map((root) => root.toLowerCase())
+    let count = 0
+    for (const field of raw?.fields ?? []) {
+      for (const item of field?.items ?? []) {
+        const target = item?.path
+        if (typeof target !== 'string' || target.startsWith('shell:')) continue
+        if (!roots.includes(path.dirname(target).toLowerCase())) continue
+        try {
+          execFileSync('attrib', ['-h', target], { stdio: 'ignore' })
+          count += 1
+        } catch {
+          // 이미 지워진 파일 등 — 다음 항목으로
+        }
+      }
+    }
+    log(`종료: 숨겨둔 원본 ${count}개 다시 표시`)
+  } catch {
+    // 상태 파일이 없으면 되살릴 것도 없다
+  }
+}
+
 app.on('before-quit', () => {
   quitting = true
+  unhideAllSync()
 })
 
 app.on('will-quit', () => globalShortcut.unregisterAll())

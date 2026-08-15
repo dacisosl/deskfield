@@ -60,7 +60,7 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
             />
             <span>
               필드에 담으면 바탕화면 원본 숨기기
-              <small className="df-sub">파일은 옮기지 않고 숨김 표시만 합니다. 필드에서 빼면 다시 보입니다.</small>
+              <small className="df-sub">앱이 켜져 있는 동안만 숨깁니다. 앱을 끄면 전부 다시 보이고, 켜면 다시 정리됩니다.</small>
             </span>
           </label>
 

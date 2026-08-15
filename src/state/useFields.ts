@@ -89,6 +89,16 @@ export function useFields() {
       if (!alive) return
       setState({ ...next, fields: checked })
       setLoaded(true)
+
+      // 숨김은 앱이 켜져 있는 동안만 — 종료 때 전부 복원되므로,
+      // 시작하면서 마지막 배치 기준으로 다시 숨긴다.
+      if (next.settings.hideOriginals) {
+        for (const field of checked) {
+          for (const item of field.items) {
+            if (isReal(item) && !item.missing) void api.setHidden(item.path, true)
+          }
+        }
+      }
     })
     return () => {
       alive = false
