@@ -70,6 +70,11 @@ body,
   background: rgba(255, 255, 255, 0.6);
 }
 
+.df-field__link {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
 .df-field__count {
   font-size: 11px;
   opacity: 0.55;

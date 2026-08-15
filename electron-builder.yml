@@ -6,6 +6,11 @@ directories:
   output: release
   buildResources: build
 
+# 압축을 최대로 — zip 용량이 눈에 띄게 준다 (빌드는 조금 느려진다)
+compression: maximum
+# 언어팩은 한국어·영어만 담는다 (수십 개 언어 × 총 ~45MB 절감)
+electronLanguages: [ko, en-US]
+
 files:
   - dist/**
   - build/icon.png

@@ -223,6 +223,11 @@ export const FieldBox = memo(function FieldBox({
             if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur()
           }}
         />
+        {field.portal && (
+          <span className="df-field__link" title={`폴더를 비추는 중: ${field.portal}`}>
+            🔗
+          </span>
+        )}
         <span className="df-field__count">{field.items.length}</span>
         <button
           type="button"
@@ -302,7 +307,7 @@ export const FieldBox = memo(function FieldBox({
 
           {field.items.length === 0 && (
             <p className="df-field__empty" style={{ color: tone.ink }}>
-              폴더나 파일을 여기로 끌어다 놓으세요
+              {field.portal ? '폴더가 비어 있어요' : '폴더나 파일을 여기로 끌어다 놓으세요'}
             </p>
           )}
         </div>

@@ -36,6 +36,7 @@ export default function App() {
     sortField,
     setSettings,
     replaceFields,
+    refreshPortal,
   } = useFields()
 
   const [bounds, setBounds] = useState({ w: window.innerWidth, h: window.innerHeight })
@@ -158,7 +159,8 @@ export default function App() {
         const oldPath = item.path
         const fieldId = owner.id
         const moved = result.newPath
-        removeItems([payload.itemId])
+        if (owner.portal) void refreshPortal(owner.id)
+        else removeItems([payload.itemId])
         setToast({
           text: `"${item.name}" → "${folder.name}" 폴더로 옮겼어요`,
           action: {
@@ -189,7 +191,7 @@ export default function App() {
         })
       }
     },
-    [addPaths, removeItems, stateRef],
+    [addPaths, refreshPortal, removeItems, stateRef],
   )
 
   /** 실제 파일 이름 변경 — 타일과 파일이 함께 바뀐다. */
@@ -200,9 +202,11 @@ export default function App() {
         setToast({ text: result.error ?? '이름을 바꾸지 못했어요' })
         return
       }
-      updateItem(item.id, { path: result.newPath, name: newName })
+      const owner = stateRef.current.fields.find((f) => f.items.some((it) => it.id === item.id))
+      if (owner?.portal) void refreshPortal(owner.id)
+      else updateItem(item.id, { path: result.newPath, name: newName })
     },
-    [updateItem],
+    [refreshPortal, stateRef, updateItem],
   )
 
   const trashItem = useCallback(
@@ -212,10 +216,12 @@ export default function App() {
         setToast({ text: result.error ?? '휴지통으로 보내지 못했어요' })
         return
       }
-      removeItems([item.id])
+      const owner = stateRef.current.fields.find((f) => f.items.some((it) => it.id === item.id))
+      if (owner?.portal) void refreshPortal(owner.id)
+      else removeItems([item.id])
       setToast({ text: `"${item.name}"을(를) 휴지통으로 보냈어요` })
     },
-    [removeItems],
+    [refreshPortal, removeItems, stateRef],
   )
 
   const newFolderIn = useCallback(
@@ -276,11 +282,41 @@ export default function App() {
   }, [bounds.h, bounds.w, replaceFields])
 
   const fieldMenu = useCallback((field: Field, x: number, y: number) => {
+    if (field.portal) {
+      setMenu({
+        x,
+        y,
+        onColor: (color) => patchField(field.id, { color }),
+        entries: [
+          { label: '폴더 열기', onSelect: () => void api.open(field.portal as string) },
+          { label: '새로 고침', onSelect: () => void refreshPortal(field.id) },
+          {
+            label: '포털 해제 (일반 필드로)',
+            onSelect: () => patchField(field.id, { portal: undefined, items: [] }),
+          },
+          { label: '', separator: true },
+          { label: field.collapsed ? '펼치기' : '접기', onSelect: () => patchField(field.id, { collapsed: !field.collapsed }) },
+          { label: '', separator: true },
+          { label: '필드 삭제', danger: true, onSelect: () => removeField(field.id) },
+        ],
+      })
+      return
+    }
     setMenu({
       x,
       y,
       onColor: (color) => patchField(field.id, { color }),
       entries: [
+        {
+          label: '폴더 비추기(포털)…',
+          onSelect: async () => {
+            const picked = await api.pick('folder')
+            if (picked[0]) {
+              const name = picked[0].split(/[\\/]/).filter(Boolean).pop() ?? picked[0]
+              patchField(field.id, { portal: picked[0], title: name, items: [] })
+            }
+          },
+        },
         {
           label: '파일 추가…',
           onSelect: async () => {
@@ -317,10 +353,12 @@ export default function App() {
         { label: '필드 삭제', danger: true, onSelect: () => removeField(field.id) },
       ],
     })
-  }, [addPaths, addSpecial, clearField, newFolderIn, patchField, removeField, sortField])
+  }, [addPaths, addSpecial, clearField, newFolderIn, patchField, refreshPortal, removeField, sortField])
 
   const itemMenu = useCallback((item: FieldItem, x: number, y: number) => {
     const special = item.path.startsWith('shell:')
+    const owner = stateRef.current.fields.find((f) => f.items.some((it) => it.id === item.id))
+    const inPortal = !!owner?.portal
     setMenu({
       x,
       y,
@@ -331,24 +369,77 @@ export default function App() {
           : [{ label: '파일 위치 열기', onSelect: () => void api.reveal(item.path) }]),
         { label: '', separator: true },
         ...(special
-          ? []
+          ? [{ label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) }]
           : [
               { label: '이름 바꾸기…', onSelect: () => setRenameFor(item) },
-              { label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) },
+              // 포털 항목은 새로고침 때 다시 만들어져 이모지가 유지되지 않는다
+              ...(inPortal ? [] : [{ label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) }]),
             ]),
-        ...(special ? [{ label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) }] : []),
         { label: '', separator: true },
-        { label: '필드에서 빼기', onSelect: () => removeItems([item.id]) },
+        ...(inPortal ? [] : [{ label: '필드에서 빼기', onSelect: () => removeItems([item.id]) }]),
         ...(special
           ? []
           : [{ label: '휴지통으로 삭제', danger: true, onSelect: () => void trashItem(item) }]),
       ],
     })
-  }, [openItem, removeItems, trashItem])
+  }, [openItem, removeItems, stateRef, trashItem])
 
   const dropPaths = useCallback(
-    (id: string, paths: string[], index: number) => void addPaths(id, paths, index),
-    [addPaths],
+    (id: string, paths: string[], index: number) => {
+      const field = stateRef.current.fields.find((f) => f.id === id)
+      if (field?.portal) {
+        // 포털은 폴더 그 자체 — 떨어뜨리면 폴더 안으로 이동한다.
+        const portal = field.portal
+        void (async () => {
+          let moved = 0
+          for (const src of paths) {
+            const result = await api.moveInto(src, portal)
+            if (result.ok) moved += 1
+          }
+          setToast({ text: `${moved}개를 "${field.title}" 폴더로 옮겼어요` })
+          void refreshPortal(id)
+        })()
+        return
+      }
+      void addPaths(id, paths, index)
+    },
+    [addPaths, refreshPortal, stateRef],
+  )
+
+  /** 필드 간 이동 — 포털이 얽히면 실제 파일 이동으로 바뀐다. */
+  const moveItemSmart = useCallback(
+    (itemId: string, toFieldId: string, index: number) => {
+      const source = stateRef.current.fields.find((f) => f.items.some((it) => it.id === itemId))
+      const target = stateRef.current.fields.find((f) => f.id === toFieldId)
+      const item = source?.items.find((it) => it.id === itemId)
+      if (!source || !target || !item) return
+
+      if (target.portal) {
+        if (source.id === target.id || item.path.startsWith('shell:')) return
+        const portal = target.portal
+        void (async () => {
+          const result = await api.moveInto(item.path, portal)
+          if (!result.ok) {
+            setToast({ text: result.error ?? '옮기지 못했어요' })
+            return
+          }
+          if (!source.portal) removeItems([itemId])
+          setToast({ text: `"${item.name}"을(를) "${target.title}"(으)로 옮겼어요` })
+          void refreshPortal(toFieldId)
+          if (source.portal) void refreshPortal(source.id)
+        })()
+        return
+      }
+
+      if (source.portal) {
+        // 포털에서 일반 필드로 끌면 참조로 담는다 (파일은 그대로).
+        void addPaths(toFieldId, [item.path], index)
+        return
+      }
+
+      moveItem(itemId, toFieldId, index)
+    },
+    [addPaths, moveItem, refreshPortal, removeItems, stateRef],
   )
 
   /** 편집 모드에서 빈 곳을 끌면 그 크기대로 새 필드를 만든다. */
@@ -401,6 +492,11 @@ export default function App() {
         const itemId = event.dataTransfer.getData('application/x-deskfield-item')
         if (!itemId) return
         event.preventDefault()
+        const owner = stateRef.current.fields.find((f) => f.items.some((it) => it.id === itemId))
+        if (owner?.portal) {
+          setToast({ text: '폴더 안 파일이에요 — 빼려면 다른 필드나 폴더로 옮기세요' })
+          return
+        }
         removeItems([itemId])
         setToast({ text: '필드에서 뺐어요 — 바탕화면에 다시 보입니다' })
       }}
@@ -416,7 +512,7 @@ export default function App() {
           onItemMenu={itemMenu}
           onFieldMenu={fieldMenu}
           onDropPaths={dropPaths}
-          onMoveItem={moveItem}
+          onMoveItem={moveItemSmart}
           onDropInto={dropInto}
           onGesture={setGesture}
           onRaise={setFrontId}

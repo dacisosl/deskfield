@@ -26,6 +26,16 @@ const api = {
   saveState: (state: unknown) => ipcRenderer.invoke('state:save', state) as Promise<void>,
 
   scanDesktop: () => ipcRenderer.invoke('desktop:scan') as Promise<ScanEntry[]>,
+  listDir: (dir: string) => ipcRenderer.invoke('dir:list', dir) as Promise<ScanEntry[]>,
+  watchDir: (dir: string) => ipcRenderer.send('dir:watch', dir),
+  unwatchDir: (dir: string) => ipcRenderer.send('dir:unwatch', dir),
+  onDirChanged: (handler: (dir: string) => void) => {
+    const listener = (_e: unknown, dir: string) => handler(dir)
+    ipcRenderer.on('dir:changed', listener)
+    return () => {
+      ipcRenderer.off('dir:changed', listener)
+    }
+  },
   exists: (target: string) => ipcRenderer.invoke('fs:exists', target) as Promise<boolean>,
   stat: (target: string) =>
     ipcRenderer.invoke('fs:stat', target) as Promise<{

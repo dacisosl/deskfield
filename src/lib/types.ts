@@ -22,6 +22,8 @@ export interface Field {
   collapsed: boolean
   /** 항목이 늘어나면 높이를 자동으로 키운다. */
   autoGrow: boolean
+  /** 포털: 이 폴더의 실제 내용을 실시간으로 비춘다. items는 파생 상태. */
+  portal?: string
   items: FieldItem[]
 }
 

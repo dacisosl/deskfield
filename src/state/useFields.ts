@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import {
   DEFAULT_SETTINGS,
@@ -59,8 +59,24 @@ function normalizeField(field: Field): Field {
     h: Math.max(MIN_H, field.h),
     collapsed: !!field.collapsed,
     autoGrow: field.autoGrow ?? true,
+    portal: typeof field.portal === 'string' ? field.portal : undefined,
     items: Array.isArray(field.items) ? field.items : [],
   }
+}
+
+/** 포털 항목의 id는 경로에서 나온다 — 새로고침해도 같은 항목은 같은 id. */
+function portalItems(entries: Awaited<ReturnType<typeof api.listDir>>): FieldItem[] {
+  return entries
+    .sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+      return a.name.localeCompare(b.name, 'ko')
+    })
+    .map((entry) => ({
+      id: `p:${entry.path.toLowerCase()}`,
+      path: entry.path,
+      name: entry.name,
+      kind: entry.isDirectory ? ('folder' as const) : ('file' as const),
+    }))
 }
 
 export function useFields() {
@@ -113,12 +129,48 @@ export function useFields() {
         ...state,
         fields: state.fields.map((field) => ({
           ...field,
-          items: field.items.map(({ missing: _missing, ...item }) => item),
+          items: field.portal ? [] : field.items.map(({ missing: _missing, ...item }) => item),
         })),
       })
     }, 400)
     return () => clearTimeout(timer)
   }, [state, loaded])
+
+  const refreshPortal = useCallback(async (fieldId: string) => {
+    const field = stateRef.current.fields.find((f) => f.id === fieldId)
+    if (!field?.portal) return
+    const items = portalItems(await api.listDir(field.portal))
+    setState((prev) => ({
+      ...prev,
+      fields: prev.fields.map((f) => (f.id === fieldId ? { ...f, items } : f)),
+    }))
+  }, [])
+
+  // 포털 필드는 폴더를 감시하다가 내용이 바뀌면 다시 읽는다.
+  const portalKey = useMemo(
+    () => state.fields.filter((f) => f.portal).map((f) => `${f.id}:${f.portal}`).join('|'),
+    [state.fields],
+  )
+
+  useEffect(() => {
+    if (!loaded || !portalKey) return
+    const portals = stateRef.current.fields
+      .filter((f) => f.portal)
+      .map((f) => ({ id: f.id, dir: f.portal as string }))
+    for (const portal of portals) {
+      api.watchDir(portal.dir)
+      void refreshPortal(portal.id)
+    }
+    const off = api.onDirChanged((dir) => {
+      stateRef.current.fields
+        .filter((f) => f.portal === dir)
+        .forEach((f) => void refreshPortal(f.id))
+    })
+    return () => {
+      portals.forEach((portal) => api.unwatchDir(portal.dir))
+      off()
+    }
+  }, [loaded, portalKey, refreshPortal])
 
   const patchField = useCallback((id: string, patch: Partial<Field>) => {
     setState((prev) => ({
@@ -333,5 +385,6 @@ export function useFields() {
     sortField,
     setSettings,
     replaceFields,
+    refreshPortal,
   }
 }

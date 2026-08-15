@@ -11,7 +11,7 @@ import {
   shell,
 } from 'electron'
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, promises as fs } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, watch, promises as fs } from 'node:fs'
 import path from 'node:path'
 
 // CommonJS로 번들된다. Windows에서 asar 안의 ESM 진입점을 읽지 못하는 문제가 있어
@@ -208,47 +208,88 @@ function desktopRoots() {
   return roots
 }
 
+/** 폴더 하나의 내용 나열 — 바탕화면 스캔과 포털이 함께 쓴다. */
+async function listDir(root: string): Promise<ScanEntry[]> {
+  const out: ScanEntry[] = []
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true })
+  } catch {
+    return out
+  }
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || entry.name.toLowerCase() === 'desktop.ini') continue
+    const full = path.join(root, entry.name)
+
+    let size = 0
+    let mtime = 0
+    try {
+      const stat = await fs.stat(full)
+      size = stat.size
+      mtime = stat.mtimeMs
+    } catch {
+      // 끊어진 바로가기 등 — 항목 자체는 살려두고 크기/시각만 비운다.
+    }
+
+    out.push({
+      path: full,
+      name: entry.name,
+      isDirectory: entry.isDirectory(),
+      ext: entry.isDirectory() ? '' : path.extname(entry.name).slice(1).toLowerCase(),
+      size,
+      mtime,
+    })
+  }
+  return out
+}
+
 async function scanDesktop(): Promise<ScanEntry[]> {
   const out: ScanEntry[] = []
   const seen = new Set<string>()
-
   for (const root of desktopRoots()) {
-    let entries: import('node:fs').Dirent[]
-    try {
-      entries = await fs.readdir(root, { withFileTypes: true })
-    } catch {
-      continue
-    }
-
-    for (const entry of entries) {
-      if (entry.name.startsWith('.') || entry.name.toLowerCase() === 'desktop.ini') continue
-      const full = path.join(root, entry.name)
-      const key = full.toLowerCase()
+    for (const entry of await listDir(root)) {
+      const key = entry.path.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
-
-      let size = 0
-      let mtime = 0
-      try {
-        const stat = await fs.stat(full)
-        size = stat.size
-        mtime = stat.mtimeMs
-      } catch {
-        // 끊어진 바로가기 등 — 항목 자체는 살려두고 크기/시각만 비운다.
-      }
-
-      out.push({
-        path: full,
-        name: entry.name,
-        isDirectory: entry.isDirectory(),
-        ext: entry.isDirectory() ? '' : path.extname(entry.name).slice(1).toLowerCase(),
-        size,
-        mtime,
-      })
+      out.push(entry)
     }
   }
-
   return out
+}
+
+/* ------------------------------------------------------------------ 폴더 감시 (포털) */
+
+const dirWatchers = new Map<string, { count: number; close: () => void }>()
+
+function watchDir(dir: string) {
+  const existing = dirWatchers.get(dir)
+  if (existing) {
+    existing.count += 1
+    return
+  }
+  let timer: NodeJS.Timeout | null = null
+  try {
+    const watcher = watch(dir, { persistent: false }, () => {
+      // 파일 하나 옮겨도 이벤트가 여러 번 온다 — 묶어서 한 번만 알린다.
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => win?.webContents.send('dir:changed', dir), 250)
+    })
+    watcher.on('error', (error) => log(`폴더 감시 오류: ${dir}: ${error}`))
+    dirWatchers.set(dir, { count: 1, close: () => watcher.close() })
+  } catch (error) {
+    log(`폴더 감시 실패: ${dir}: ${error}`)
+  }
+}
+
+function unwatchDir(dir: string) {
+  const existing = dirWatchers.get(dir)
+  if (!existing) return
+  existing.count -= 1
+  if (existing.count <= 0) {
+    existing.close()
+    dirWatchers.delete(dir)
+  }
 }
 
 /* ------------------------------------------------------------------ 파일 조작 */
@@ -317,6 +358,9 @@ function registerIpc() {
   ipcMain.handle('state:save', (_e, state: unknown) => writeState(state))
 
   ipcMain.handle('desktop:scan', () => scanDesktop())
+  ipcMain.handle('dir:list', (_e, dir: string) => listDir(dir))
+  ipcMain.on('dir:watch', (_e, dir: string) => watchDir(dir))
+  ipcMain.on('dir:unwatch', (_e, dir: string) => unwatchDir(dir))
 
   ipcMain.handle('fs:exists', async (_e, target: string) => {
     try {
