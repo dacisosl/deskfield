@@ -12,8 +12,12 @@ files:
   - package.json
 
 win:
-  target: [nsis, portable]
+  # zip: NSIS 같은 32비트 압축 실행기 없이 앱을 그대로 담는다.
+  # 보안 프로그램이 서명 없는 NSIS 스텁을 조용히 차단하는 환경에서도 실행된다.
+  target: [zip, nsis, portable]
   icon: build/icon.png
+  # 실행 파일명은 영문으로 — 한글 exe 이름이 만들 수 있는 변수를 없앤다.
+  executableName: DeskField
 
 nsis:
   artifactName: DeskField-Setup-${version}.${ext}
