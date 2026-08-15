@@ -3,7 +3,12 @@ name: Windows 설치 파일 빌드
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
+
+# 릴리스를 만들려면 쓰기 권한이 필요하다.
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -21,14 +26,25 @@ jobs:
       - run: npm run icon
       - run: npm run dist
 
+      # package.json의 버전을 태그 이름으로 쓴다.
+      - id: meta
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: DeskField-Setup
           path: release/*.exe
           if-no-files-found: error
 
-      # 태그를 밀면 릴리스에도 올린다.
+      # 태그가 없으면 액션이 현재 커밋에 태그를 만들고 릴리스를 올린다.
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          name: 바탕 필드 v${{ steps.meta.outputs.version }}
+          body: |
+            `DeskField-Setup-${{ steps.meta.outputs.version }}.exe`를 받아 실행하세요.
+
+            서명이 없는 설치 파일이라 SmartScreen이 한 번 막습니다 — **추가 정보 → 실행**으로 넘어가면 됩니다.
           files: release/*.exe
+          fail_on_unmatched_files: true
