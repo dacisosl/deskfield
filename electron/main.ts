@@ -736,16 +736,35 @@ async function findAppDir(extracted: string): Promise<string | null> {
   return null
 }
 
+/**
+ * Electron은 fs를 가로채 .asar 파일을 폴더처럼 다룬다. 그래서 스테이징 폴더의
+ * app.asar를 지우려는 순간 아카이브를 열어 스스로 잠가버리고, 잠긴 파일은
+ * 지울 수 없어 EBUSY로 실패한다 — 업데이트가 계속 실패하던 실제 원인.
+ * 업데이트 파일을 만지는 동안은 이 특수 처리를 꺼야 한다.
+ */
+async function withoutAsar<T>(fn: () => Promise<T>): Promise<T> {
+  const proc = process as NodeJS.Process & { noAsar?: boolean }
+  const prev = proc.noAsar
+  proc.noAsar = true
+  try {
+    return await fn()
+  } finally {
+    proc.noAsar = prev ?? false
+  }
+}
+
 /** 받아서 풀어둔 새 버전 폴더 (설치 준비 완료 상태) */
-let staged: { version: string; dir: string } | null = null
+let staged: { version: string; dir: string; work: string } | null = null
 
 /** 재시작을 미뤘을 때 다음 실행에서 이어받기 위한 표시 */
 const PENDING_FILE = path.join(app.getPath('userData'), 'pending-update.json')
 
-function readPending(): { version: string; dir: string } | null {
+function readPending(): { version: string; dir: string; work: string } | null {
   try {
     const data = JSON.parse(readFileSync(PENDING_FILE, 'utf8'))
-    return typeof data?.version === 'string' && typeof data?.dir === 'string' ? data : null
+    return typeof data?.version === 'string' && typeof data?.dir === 'string'
+      ? { ...data, work: typeof data?.work === 'string' ? data.work : path.dirname(data.dir) }
+      : null
   } catch {
     return null
   }
@@ -794,9 +813,18 @@ async function prepareUpdate(): Promise<boolean> {
 
     win?.webContents.send('update:progress', { version: info.version, phase: 'download' })
 
-    const workDir = path.join(app.getPath('temp'), 'deskfield-update')
-    await fs.rm(workDir, { recursive: true, force: true })
-    await fs.mkdir(workDir, { recursive: true })
+    const workDir = await withoutAsar(async () => {
+      let dir = path.join(app.getPath('temp'), 'deskfield-update')
+      try {
+        await fs.rm(dir, { recursive: true, force: true })
+      } catch (error) {
+        // 어떤 이유로든 못 지우면 싸우지 말고 새 폴더로 간다.
+        log(`이전 스테이징 정리 실패(${error}) — 새 폴더로 우회`)
+        dir = path.join(app.getPath('temp'), `deskfield-update-${Date.now()}`)
+      }
+      await fs.mkdir(dir, { recursive: true })
+      return dir
+    })
 
     log(`업데이트 내려받는 중: v${info.version} (${info.url})`)
     const started = Date.now()
@@ -814,13 +842,15 @@ async function prepareUpdate(): Promise<boolean> {
     win?.webContents.send('update:progress', { version: info.version, phase: 'extract' })
     const extracted = path.join(workDir, 'app')
     const unzipStarted = Date.now()
-    await extractZip(zipPath, extracted)
+    // asar 특수 처리를 끈 채로 — 안 그러면 app.asar를 쓰고 지우는 데서 꼬인다.
+    const appDir = await withoutAsar(async () => {
+      await extractZip(zipPath, extracted)
+      return findAppDir(extracted)
+    })
     log(`압축 해제 완료: ${Date.now() - unzipStarted}ms`)
-
-    const appDir = await findAppDir(extracted)
     if (!appDir) throw new Error('압축 안에서 DeskField.exe를 찾지 못했습니다')
 
-    staged = { version: info.version, dir: appDir }
+    staged = { version: info.version, dir: appDir, work: workDir }
     try {
       writeFileSync(PENDING_FILE, JSON.stringify(staged), 'utf8')
     } catch (error) {
@@ -846,7 +876,9 @@ function installUpdate(): boolean {
   if (!staged) return false
   try {
     const dest = path.dirname(app.getPath('exe'))
-    const script = path.join(app.getPath('temp'), 'deskfield-update', 'apply.cmd')
+    // 스크립트를 스테이징 밖에 둔다 — 마지막 줄에서 스테이징을 스스로 지우기 때문.
+    // 이 청소가 빠지면 남은 app.asar가 다음 업데이트의 정리 단계를 계속 실패시킨다.
+    const script = path.join(app.getPath('temp'), `deskfield-apply-${Date.now()}.cmd`)
     const swapLog = path.join(app.getPath('userData'), 'update-swap.log')
     writeFileSync(
       script,
@@ -858,6 +890,8 @@ function installUpdate(): boolean {
         `echo robocopy exit=%errorlevel% >> "${swapLog}"`,
         // 교체가 실패해도 앱은 반드시 다시 띄운다 — 실패했다고 앱이 사라지면 안 된다.
         `start "" "${path.join(dest, 'DeskField.exe')}"`,
+        `rmdir /s /q "${staged.work}"`,
+        `del "%~f0"`,
       ].join('\r\n'),
       'utf8',
     )
@@ -1006,6 +1040,22 @@ app.whenReady().then(() => {
       log(`자동 시작 설정 실패: ${error}`)
     }
   }
+
+  // 예전 버전이 남긴 스테이징 잔재를 치운다 — 이게 남아 있으면
+  // 업데이트 정리 단계가 EBUSY로 계속 실패한다 (기존 사용자 구제).
+  void withoutAsar(async () => {
+    const temp = app.getPath('temp')
+    for (const entry of await fs.readdir(temp).catch(() => [] as string[])) {
+      if (!entry.startsWith('deskfield-update')) continue
+      const target = path.join(temp, entry)
+      // 방금 미뤄둔 업데이트의 스테이징은 남겨야 한다
+      if (readPending()?.work === target) continue
+      await fs.rm(target, { recursive: true, force: true }).then(
+        () => log(`스테이징 잔재 정리: ${target}`),
+        (error) => log(`스테이징 잔재 정리 실패: ${target}: ${error}`),
+      )
+    }
+  })
 
   // 미뤄둔 업데이트가 있으면 창을 만들기 전에 적용하고 재시작한다.
   if (applyPendingUpdate()) return
