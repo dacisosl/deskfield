@@ -228,6 +228,11 @@ body,
   opacity: var(--dim, 0.45);
 }
 
+/* 완전히 숨겨둔 상태에서도 커서를 올리면 그 필드만 살짝 나타난다 */
+.df-root--dim .df-field:hover {
+  opacity: 0.9;
+}
+
 .df-root--dim .df-bar {
   opacity: 0.12;
 }
@@ -582,7 +587,12 @@ body,
   justify-content: center;
   background: rgba(28, 28, 42, 0.3);
   backdrop-filter: blur(3px);
-  z-index: 80;
+  /* 필드·도구막대·메뉴·배너보다 확실히 위. 모달 안의 모달은 더 위. */
+  z-index: 200;
+}
+
+.df-modal .df-modal {
+  z-index: 210;
 }
 
 .df-modal__card {
@@ -867,6 +877,16 @@ body,
   flex-direction: column;
   gap: 12px;
   font-size: 13px;
+  /* 항목이 늘어도 닫기 버튼이 화면 밖으로 밀리지 않게 본문만 스크롤한다. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.df-modal__head,
+.df-modal__foot {
+  flex: none;
 }
 
 .df-row {

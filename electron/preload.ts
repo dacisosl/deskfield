@@ -87,6 +87,15 @@ const api = {
   setAutostart: (enabled: boolean) => ipcRenderer.invoke('autostart:set', enabled) as Promise<boolean>,
 
   getWorkArea: () => ipcRenderer.invoke('app:workarea') as Promise<Rect>,
+
+  watchForeground: (enabled: boolean) => ipcRenderer.send('watch:foreground', enabled),
+  onDesktopActive: (handler: (active: boolean) => void) => {
+    const listener = (_e: unknown, active: boolean) => handler(active)
+    ipcRenderer.on('desktop:active', listener)
+    return () => {
+      ipcRenderer.off('desktop:active', listener)
+    }
+  },
   getVersion: () => ipcRenderer.invoke('app:version') as Promise<string>,
 
   getWallpaper: () => ipcRenderer.invoke('wallpaper:get') as Promise<string | null>,

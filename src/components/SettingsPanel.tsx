@@ -117,25 +117,26 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
               onChange={(e) => onChange({ dimIdle: e.target.checked })}
             />
             <span>
-              다른 일 할 때 흐리게
+              다른 창을 쓸 때 흐리게
               <small className="df-sub">
-                마우스가 필드에서 벗어나면 옅어지고, 다시 올리면 바로 선명해집니다.
+                다른 프로그램 창이 앞에 오면 필드가 옅어지고, 바탕화면으로 돌아오면
+                선명해집니다.
               </small>
             </span>
           </label>
 
           {settings.dimIdle && (
             <label className="df-row">
-              <span>흐린 정도</span>
+              <span>남길 정도</span>
               <input
                 type="range"
-                min={0.15}
-                max={1}
+                min={0}
+                max={0.9}
                 step={0.05}
                 value={settings.dimLevel}
                 onChange={(e) => onChange({ dimLevel: Number(e.target.value) })}
               />
-              <b>{Math.round(settings.dimLevel * 100)}%</b>
+              <b>{settings.dimLevel === 0 ? '숨김' : `${Math.round(settings.dimLevel * 100)}%`}</b>
             </label>
           )}
 

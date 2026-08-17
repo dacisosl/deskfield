@@ -72,23 +72,41 @@ export default function App() {
     state.settings.glassImage,
   )
 
-  /** 커서가 필드에서 벗어난 채로 잠시 있으면 흐려진다. 다시 올리면 즉시 선명해진다. */
+  /** 필드 위에 커서가 있으면 언제나 선명하게 — 만지는 중이니까. */
   const onHover = useCallback(
     (over: boolean) => {
+      if (!over) return
       if (dimTimer.current) {
         clearTimeout(dimTimer.current)
         dimTimer.current = null
       }
-      if (over || !stateRef.current.settings.dimIdle) {
-        setDimmed(false)
-        return
-      }
-      dimTimer.current = setTimeout(() => setDimmed(true), 1200)
+      setDimmed(false)
     },
-    [stateRef],
+    [],
   )
 
   usePassthrough(capture, onHover)
+
+  // 다른 앱 창이 앞에 오면 흐려지고, 바탕화면으로 돌아오면 선명해진다.
+  useEffect(() => {
+    api.watchForeground(state.settings.dimIdle)
+    if (!state.settings.dimIdle) setDimmed(false)
+  }, [state.settings.dimIdle])
+
+  useEffect(() => {
+    return api.onDesktopActive((active) => {
+      if (dimTimer.current) {
+        clearTimeout(dimTimer.current)
+        dimTimer.current = null
+      }
+      if (active) {
+        setDimmed(false)
+        return
+      }
+      // 창을 잠깐 스쳐 지나가는 경우까지 깜빡이지 않게 조금 기다린다.
+      dimTimer.current = setTimeout(() => setDimmed(true), 400)
+    })
+  }, [])
 
   // 조작 중(편집·드래그·메뉴)에는 항상 선명하게.
   useEffect(() => {

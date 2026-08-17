@@ -583,14 +583,23 @@ function registerIpc() {
     return setHiddenBatchSync(paths, hidden)
   })
 
+  // 인자를 붙여 등록하면 조회할 때도 같은 인자를 줘야 매칭된다. 애초에
+  // 인자가 필요 없으므로 양쪽 다 붙이지 않는다 — 안 그러면 항상 '꺼짐'으로 읽힌다.
   ipcMain.handle('autostart:get', () => app.getLoginItemSettings().openAtLogin)
 
   ipcMain.handle('autostart:set', (_e, enabled: boolean) => {
-    app.setLoginItemSettings({ openAtLogin: enabled, args: ['--hidden'] })
-    return app.getLoginItemSettings().openAtLogin
+    app.setLoginItemSettings({ openAtLogin: enabled })
+    const now = app.getLoginItemSettings().openAtLogin
+    log(`자동 시작 ${enabled ? '켬' : '끔'} → ${now}`)
+    return now
   })
 
   ipcMain.handle('app:workarea', () => screen.getPrimaryDisplay().workArea)
+
+  ipcMain.on('watch:foreground', (_e, enabled: boolean) => {
+    if (enabled) startForegroundWatch()
+    else stopForegroundWatch()
+  })
 
   ipcMain.handle('app:version', () => app.getVersion())
 
@@ -817,6 +826,80 @@ function installUpdate(): boolean {
   }
 }
 
+/* ------------------------------------------------------------------ 포그라운드 감시 */
+
+/**
+ * 지금 맨 앞에 있는 창이 바탕화면인지(=우리 필드를 봐야 하는 상황인지) 알려준다.
+ * Electron에는 다른 앱의 포커스를 알 방법이 없어서 PowerShell을 하나 띄워 감시한다.
+ * 기능을 켠 동안에만 돌고, 0.7초마다 한 번 확인하며 바뀔 때만 한 줄 뱉는다.
+ */
+let watcher: ReturnType<typeof spawn> | null = null
+let desktopActive = true
+
+const DESKTOP_CLASSES = new Set(['Progman', 'WorkerW'])
+
+const WATCH_SCRIPT = `$ErrorActionPreference='SilentlyContinue'
+Add-Type -Namespace DF -Name Win -MemberDefinition @'
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint id);
+[DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder s, int max);
+'@
+$last = ''
+while ($true) {
+  $h = [DF.Win]::GetForegroundWindow()
+  $owner = 0
+  [void][DF.Win]::GetWindowThreadProcessId($h, [ref]$owner)
+  $sb = New-Object System.Text.StringBuilder 256
+  [void][DF.Win]::GetClassName($h, $sb, 256)
+  $line = "$owner|$($sb.ToString())"
+  if ($line -ne $last) { $last = $line; Write-Output $line }
+  Start-Sleep -Milliseconds 700
+}`
+
+function startForegroundWatch() {
+  if (watcher || process.platform !== 'win32') return
+  try {
+    const script = path.join(app.getPath('temp'), 'deskfield-watch.ps1')
+    writeFileSync(script, WATCH_SCRIPT, 'utf8')
+    watcher = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    })
+    watcher.stdout?.setEncoding('utf8')
+    watcher.stdout?.on('data', (chunk: string) => {
+      for (const line of chunk.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        const [owner, cls] = line.trim().split('|')
+        // 우리 창이거나 바탕화면이면 '보는 중', 그 밖의 앱이면 '다른 일 하는 중'.
+        const active = Number(owner) === process.pid || DESKTOP_CLASSES.has(cls)
+        if (active === desktopActive) continue
+        desktopActive = active
+        win?.webContents.send('desktop:active', active)
+      }
+    })
+    watcher.on('exit', () => {
+      watcher = null
+    })
+    log('포그라운드 감시 시작')
+  } catch (error) {
+    log(`포그라운드 감시 실패: ${error}`)
+    watcher = null
+  }
+}
+
+function stopForegroundWatch() {
+  if (!watcher) return
+  try {
+    watcher.kill()
+  } catch {
+    /* 이미 죽었으면 그만 */
+  }
+  watcher = null
+  desktopActive = true
+  win?.webContents.send('desktop:active', true)
+  log('포그라운드 감시 중지')
+}
+
 /* ------------------------------------------------------------------ 트레이 */
 
 function trayImage() {
@@ -868,7 +951,7 @@ app.whenReady().then(() => {
   // 그래서 첫 실행에는 자동 시작을 기본으로 켠다 (설정에서 끌 수 있다).
   if (!existsSync(STATE_FILE) && process.platform === 'win32') {
     try {
-      app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] })
+      app.setLoginItemSettings({ openAtLogin: true })
       log('첫 실행 — 자동 시작 켬')
     } catch (error) {
       log(`자동 시작 설정 실패: ${error}`)
@@ -991,4 +1074,7 @@ app.on('before-quit', () => {
 })
 
 
-app.on('will-quit', () => globalShortcut.unregisterAll())
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
+  stopForegroundWatch()
+})
