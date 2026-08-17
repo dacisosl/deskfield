@@ -223,6 +223,9 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
           </div>
 
           <p className="df-hint">
+            압축 파일(zip) 안에서 바로 실행하면 업데이트가 설치되지 않습니다 — 반드시{' '}
+            <b>압축을 풀어서</b> 쓰세요.
+            <br />
             새 버전은 <b>알아서 받아서 설치</b>합니다 — 준비되면 알려주고 잠시 뒤 스스로 다시
             시작합니다. 위 버튼은 기다리지 않고 바로 확인할 때만 쓰세요.
             <br />

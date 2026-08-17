@@ -64,6 +64,7 @@ process.on('uncaughtException', (error: Error) => {
 process.on('unhandledRejection', (reason) => log(`처리되지 않은 거부: ${reason}`))
 
 log(`--- 시작 (electron ${process.versions.electron}, ${process.platform} ${process.arch}) ---`)
+log(`실행 파일: ${app.getPath('exe')}`)
 
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -620,6 +621,7 @@ function registerIpc() {
   })
   ipcMain.handle('update:check', () => checkForUpdate(true))
   ipcMain.handle('update:install', () => installUpdate())
+  ipcMain.handle('update:openFolder', () => shell.openPath(path.dirname(app.getPath('exe'))))
   ipcMain.handle('update:openPage', () =>
     shell.openExternal(`https://github.com/${UPDATE_REPO}/releases/latest`),
   )
@@ -640,6 +642,30 @@ function registerIpc() {
 const UPDATE_REPO = 'dacisosl/deskfield'
 let updateInfo: { version: string; url: string } | null = null
 let updating = false
+
+/**
+ * 압축 폴더 안에서 바로 실행했는지 판별한다.
+ * Windows는 zip 안의 exe를 더블클릭하면 임시 폴더에 몰래 풀어서 실행하는데,
+ * 그 폴더는 앱이 꺼지면 사라진다 — 업데이트를 덮어써도 남지 않는다.
+ */
+function runningFromTemp() {
+  if (process.platform !== 'win32') return false
+  const dir = path.dirname(app.getPath('exe')).toLowerCase()
+  const temp = app.getPath('temp').toLowerCase()
+  return dir.startsWith(temp) || /\.zip|\\temp\d*_/.test(dir)
+}
+
+/** 설치 폴더에 쓸 수 있는지 (Program Files 등 권한이 없는 곳 확인) */
+async function canWriteAppDir() {
+  const probe = path.join(path.dirname(app.getPath('exe')), '.deskfield-write-test')
+  try {
+    await fs.writeFile(probe, 'x')
+    await fs.rm(probe, { force: true })
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** a > b 이면 1 */
 function cmpVersion(a: string, b: string) {
@@ -671,6 +697,18 @@ async function checkForUpdate(manual = false) {
     if (cmpVersion(latest, app.getVersion()) > 0) {
       updateInfo = { version: latest, url: asset.browser_download_url }
       log(`업데이트 발견: v${latest}`)
+
+      if (runningFromTemp()) {
+        // 여기서 받아봐야 앱이 꺼지면 사라진다. 받지 말고 사실대로 알린다.
+        log(`업데이트 불가: 임시 폴더에서 실행 중 (${path.dirname(app.getPath('exe'))})`)
+        win?.webContents.send('update:blocked', {
+          version: latest,
+          reason: 'temp',
+          dir: path.dirname(app.getPath('exe')),
+        })
+        return
+      }
+
       win?.webContents.send('update:available', latest)
       // 사용자가 뭘 누르길 기다리지 않는다 — 바로 받아둔다.
       void prepareUpdate()
@@ -742,6 +780,13 @@ async function prepareUpdate(): Promise<boolean> {
   updating = true
   const info = updateInfo
   try {
+    if (!(await canWriteAppDir())) {
+      const dir = path.dirname(app.getPath('exe'))
+      log(`업데이트 불가: 설치 폴더에 쓸 수 없음 (${dir})`)
+      win?.webContents.send('update:blocked', { version: info.version, reason: 'readonly', dir })
+      return false
+    }
+
     win?.webContents.send('update:progress', { version: info.version, phase: 'download' })
 
     const workDir = path.join(app.getPath('temp'), 'deskfield-update')
@@ -807,7 +852,7 @@ function installUpdate(): boolean {
         'chcp 65001 >nul',
         'ping -n 4 127.0.0.1 >nul',
         `robocopy "${staged.dir}" "${dest}" /E /NFL /NDL /NJH /NJS /R:3 /W:1`,
-        'if errorlevel 8 exit /b 1',
+        // 교체가 실패해도 앱은 반드시 다시 띄운다 — 실패했다고 앱이 사라지면 안 된다.
         `start "" "${path.join(dest, 'DeskField.exe')}"`,
       ].join('\r\n'),
       'utf8',

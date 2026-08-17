@@ -55,8 +55,9 @@ export default function App() {
   // 업데이트는 알아서 받고 알아서 설치한다. 사용자는 재시작 시점만 미룰 수 있다.
   const [update, setUpdate] = useState<{
     version: string
-    phase: 'found' | 'download' | 'extract' | 'ready' | 'failed'
+    phase: 'found' | 'download' | 'extract' | 'ready' | 'failed' | 'blocked'
     reason?: string
+    dir?: string
   } | null>(null)
   const [restartIn, setRestartIn] = useState<number | null>(null)
   const [dimmed, setDimmed] = useState(false)
@@ -172,6 +173,9 @@ export default function App() {
       }),
       api.onUpdateFailed((reason) =>
         setUpdate((prev) => (prev ? { ...prev, phase: 'failed', reason } : prev)),
+      ),
+      api.onUpdateBlocked((info) =>
+        setUpdate({ version: info.version, phase: 'blocked', reason: info.reason, dir: info.dir }),
       ),
       api.onUpdateNone(() => setToast({ text: '지금이 최신 버전이에요' })),
     ]
@@ -710,6 +714,41 @@ export default function App() {
                 }}
               >
                 나중에
+              </button>
+            </>
+          )}
+
+          {update.phase === 'blocked' && (
+            <>
+              <span>
+                {update.reason === 'temp' ? (
+                  <>
+                    <b>압축 폴더 안에서 실행 중이라</b> 업데이트를 설치할 수 없어요 — 압축을 풀고
+                    실행하면 이후로는 자동으로 됩니다
+                  </>
+                ) : (
+                  <>
+                    설치 폴더에 쓸 수 없어 업데이트를 설치할 수 없어요 — 문서 폴더 같은 곳으로
+                    옮기면 자동으로 됩니다
+                  </>
+                )}
+              </span>
+              <button
+                type="button"
+                className="df-btn df-btn--go"
+                onClick={() => void api.openReleasePage()}
+              >
+                새 버전 받기
+              </button>
+              <button
+                type="button"
+                className="df-btn df-btn--ghost"
+                onClick={() => void api.openAppFolder()}
+              >
+                지금 위치 열기
+              </button>
+              <button type="button" className="df-btn df-btn--ghost" onClick={() => setUpdate(null)}>
+                닫기
               </button>
             </>
           )}

@@ -106,6 +106,19 @@ const api = {
   checkUpdate: () => ipcRenderer.invoke('update:check') as Promise<void>,
   installUpdate: () => ipcRenderer.invoke('update:install') as Promise<boolean>,
   openReleasePage: () => ipcRenderer.invoke('update:openPage') as Promise<void>,
+  openAppFolder: () => ipcRenderer.invoke('update:openFolder') as Promise<void>,
+  onUpdateBlocked: (
+    handler: (info: { version: string; reason: 'temp' | 'readonly'; dir: string }) => void,
+  ) => {
+    const listener = (
+      _e: unknown,
+      info: { version: string; reason: 'temp' | 'readonly'; dir: string },
+    ) => handler(info)
+    ipcRenderer.on('update:blocked', listener)
+    return () => {
+      ipcRenderer.off('update:blocked', listener)
+    }
+  },
   onUpdateAvailable: (handler: (version: string) => void) => {
     const listener = (_e: unknown, version: string) => handler(version)
     ipcRenderer.on('update:available', listener)
