@@ -6,11 +6,15 @@ import { api } from '../lib/api'
  * 통과시켜야 실제 아이콘과 우클릭 메뉴를 그대로 쓸 수 있다.
  * `data-solid`가 붙은 요소 위에 커서가 있을 때만 창이 입력을 받는다.
  */
-export function usePassthrough(capture: boolean) {
+export function usePassthrough(capture: boolean, onHover?: (over: boolean) => void) {
   const ignoring = useRef(true)
+  const hoverRef = useRef(onHover)
+  hoverRef.current = onHover
 
   useEffect(() => {
     const apply = (ignore: boolean) => {
+      // 히트 판정은 흐리기에도 그대로 쓴다 — 같은 판정을 두 번 하지 않으려고.
+      hoverRef.current?.(!ignore)
       if (ignoring.current === ignore) return
       ignoring.current = ignore
       api.setIgnoreMouse(ignore)

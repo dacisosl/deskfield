@@ -1,3 +1,4 @@
+import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ContextMenu, type MenuSpec } from './components/ContextMenu'
 import { EmojiPicker } from './components/EmojiPicker'
@@ -6,6 +7,7 @@ import { FieldBox } from './components/FieldBox'
 import { ScanReview, type ScanResult } from './components/ScanReview'
 import { SettingsPanel } from './components/SettingsPanel'
 import { Toolbar } from './components/Toolbar'
+import { useGlassBackdrop } from './hooks/useGlassBackdrop'
 import { usePassthrough } from './hooks/usePassthrough'
 import { api } from './lib/api'
 import { clamp, snapTo } from './lib/layout'
@@ -52,10 +54,41 @@ export default function App() {
   const [renameFor, setRenameFor] = useState<FieldItem | null>(null)
   const [updateVersion, setUpdateVersion] = useState<string | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
+  const [dimmed, setDimmed] = useState(false)
   const draftStart = useRef<{ x: number; y: number } | null>(null)
+  const dimTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const modalOpen = scanning || showSettings || !!pickerFor || !!renameFor
-  usePassthrough(editing || gesture || modalOpen || !!menu)
+  const capture = editing || gesture || modalOpen || !!menu
+
+  const glass = useGlassBackdrop(
+    state.settings.theme === 'glass',
+    bounds,
+    state.settings.glassImage,
+  )
+
+  /** 커서가 필드에서 벗어난 채로 잠시 있으면 흐려진다. 다시 올리면 즉시 선명해진다. */
+  const onHover = useCallback(
+    (over: boolean) => {
+      if (dimTimer.current) {
+        clearTimeout(dimTimer.current)
+        dimTimer.current = null
+      }
+      if (over || !stateRef.current.settings.dimIdle) {
+        setDimmed(false)
+        return
+      }
+      dimTimer.current = setTimeout(() => setDimmed(true), 1200)
+    },
+    [stateRef],
+  )
+
+  usePassthrough(capture, onHover)
+
+  // 조작 중(편집·드래그·메뉴)에는 항상 선명하게.
+  useEffect(() => {
+    if (capture) setDimmed(false)
+  }, [capture])
 
   useEffect(() => {
     const onResize = () => setBounds({ w: window.innerWidth, h: window.innerHeight })
@@ -486,7 +519,10 @@ export default function App() {
 
   return (
     <div
-      className={`df-root ${editing ? 'df-root--edit' : ''}`}
+      className={`df-root ${editing ? 'df-root--edit' : ''} ${
+        dimmed && state.settings.dimIdle ? 'df-root--dim' : ''
+      }`}
+      style={{ ['--dim' as string]: String(state.settings.dimLevel) } as React.CSSProperties}
       onPointerDown={startDraft}
       onPointerMove={moveDraft}
       onPointerUp={endDraft}
@@ -527,6 +563,7 @@ export default function App() {
           onGesture={setGesture}
           onRaise={setFrontId}
           raised={frontId === field.id}
+          glass={glass}
         />
       ))}
 

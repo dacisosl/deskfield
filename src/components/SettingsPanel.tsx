@@ -28,6 +28,50 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
         </header>
 
         <div className="df-settings">
+          <div className="df-row">
+            <span>필드 모양</span>
+            <div className="df-seg">
+              <button
+                type="button"
+                className={settings.theme === 'pastel' ? 'df-seg__on' : ''}
+                onClick={() => onChange({ theme: 'pastel' })}
+              >
+                파스텔
+              </button>
+              <button
+                type="button"
+                className={settings.theme === 'glass' ? 'df-seg__on' : ''}
+                onClick={() => onChange({ theme: 'glass' })}
+              >
+                유리
+              </button>
+            </div>
+          </div>
+
+          {settings.theme === 'glass' && (
+            <div className="df-row df-row--btns">
+              <button
+                type="button"
+                className="df-btn df-btn--ghost"
+                onClick={async () => {
+                  const picked = await api.pickImage()
+                  if (picked) onChange({ glassImage: picked })
+                }}
+              >
+                유리 배경 그림 고르기
+              </button>
+              {settings.glassImage && (
+                <button
+                  type="button"
+                  className="df-btn df-btn--ghost"
+                  onClick={() => onChange({ glassImage: undefined })}
+                >
+                  바탕화면으로 되돌리기
+                </button>
+              )}
+            </div>
+          )}
+
           <label className="df-row">
             <span>배경 진하기</span>
             <input
@@ -65,6 +109,35 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
               <small className="df-sub">앱이 켜져 있는 동안만 숨깁니다. 앱을 끄면 전부 다시 보이고, 켜면 다시 정리됩니다.</small>
             </span>
           </label>
+
+          <label className="df-row df-row--check">
+            <input
+              type="checkbox"
+              checked={settings.dimIdle}
+              onChange={(e) => onChange({ dimIdle: e.target.checked })}
+            />
+            <span>
+              다른 일 할 때 흐리게
+              <small className="df-sub">
+                마우스가 필드에서 벗어나면 옅어지고, 다시 올리면 바로 선명해집니다.
+              </small>
+            </span>
+          </label>
+
+          {settings.dimIdle && (
+            <label className="df-row">
+              <span>흐린 정도</span>
+              <input
+                type="range"
+                min={0.15}
+                max={1}
+                step={0.05}
+                value={settings.dimLevel}
+                onChange={(e) => onChange({ dimLevel: Number(e.target.value) })}
+              />
+              <b>{Math.round(settings.dimLevel * 100)}%</b>
+            </label>
+          )}
 
           <label className="df-row df-row--check">
             <input

@@ -88,6 +88,10 @@ const api = {
 
   getWorkArea: () => ipcRenderer.invoke('app:workarea') as Promise<Rect>,
   getVersion: () => ipcRenderer.invoke('app:version') as Promise<string>,
+
+  getWallpaper: () => ipcRenderer.invoke('wallpaper:get') as Promise<string | null>,
+  readImage: (target: string) => ipcRenderer.invoke('image:read', target) as Promise<string | null>,
+  pickImage: () => ipcRenderer.invoke('dialog:pickImage') as Promise<string | null>,
   quit: () => ipcRenderer.send('app:quit'),
 
   checkUpdate: () => ipcRenderer.invoke('update:check') as Promise<void>,

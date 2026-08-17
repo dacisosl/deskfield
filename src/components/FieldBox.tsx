@@ -1,3 +1,4 @@
+import type React from 'react'
 import {
   memo,
   useCallback,
@@ -42,6 +43,8 @@ interface Props {
   /** 이 필드를 맨 앞으로 (겹쳐 있을 때 조작 중인 필드가 가려지지 않게) */
   onRaise: (id: string) => void
   raised: boolean
+  /** 유리 모드에서 깔 흐린 바탕화면 (없으면 흰 유리) */
+  glass: string | null
 }
 
 export const FieldBox = memo(function FieldBox({
@@ -58,6 +61,7 @@ export const FieldBox = memo(function FieldBox({
   onGesture,
   onRaise,
   raised,
+  glass,
 }: Props) {
   const gesture = useRef<Gesture | null>(null)
   const dragged = useRef(false)
@@ -171,25 +175,42 @@ export const FieldBox = memo(function FieldBox({
 
   const cols = columns(field.w, settings)
   const rowH = tileHeight(settings)
+  const isGlass = settings.theme === 'glass'
 
   return (
     <section
       data-solid
-      className={`df-field ${field.collapsed ? 'df-field--collapsed' : ''}`}
-      style={{
-        left: field.x,
-        top: field.y,
-        width: field.w,
-        height: field.collapsed ? HEADER_H : field.h,
-        zIndex: raised ? 3 : 1,
-        background: rgba(tone.base, settings.opacity),
-        // 흰 필드는 흰 테두리가 안 보여서 옅은 회색으로 윤곽만 잡아준다.
-        borderColor:
-          field.color === 'white'
-            ? 'rgba(178, 178, 194, 0.55)'
-            : rgba('#FFFFFF', Math.min(0.75, settings.opacity + 0.2)),
-        color: tone.ink,
-      }}
+      className={`df-field ${field.collapsed ? 'df-field--collapsed' : ''} ${
+        isGlass ? 'df-field--glass' : ''
+      }`}
+      style={
+        {
+          left: field.x,
+          top: field.y,
+          width: field.w,
+          height: field.collapsed ? HEADER_H : field.h,
+          zIndex: raised ? 3 : 1,
+          color: tone.ink,
+          ...(isGlass
+            ? {
+                // 유리는 색을 옅게만 얹는다 — 배경 그림이 주인공이다.
+                '--glass-img': glass ? `url(${glass})` : 'none',
+                '--glass-w': `${bounds.w}px`,
+                '--glass-h': `${bounds.h}px`,
+                '--fx': `${field.x}px`,
+                '--fy': `${field.y}px`,
+                '--glass-tint': rgba(tone.base, Math.min(0.5, settings.opacity * 0.55)),
+              }
+            : {
+                background: rgba(tone.base, settings.opacity),
+                // 흰 필드는 흰 테두리가 안 보여서 옅은 회색으로 윤곽만 잡아준다.
+                borderColor:
+                  field.color === 'white'
+                    ? 'rgba(178, 178, 194, 0.55)'
+                    : rgba('#FFFFFF', Math.min(0.75, settings.opacity + 0.2)),
+              }),
+        } as React.CSSProperties
+      }
       onContextMenu={(event) => {
         event.preventDefault()
         onRaise(id)

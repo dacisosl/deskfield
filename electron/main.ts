@@ -375,6 +375,55 @@ async function moveInto(src: string, destDir: string): Promise<{ ok: boolean; ne
   }
 }
 
+/* ------------------------------------------------------------------ 배경 이미지 */
+
+const MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.bmp': 'image/bmp',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+
+/** 파일을 data URL로. 유리 모드가 바탕화면을 흐리게 깔 때 쓴다. */
+async function readImageDataUrl(target: string): Promise<string | null> {
+  try {
+    const buffer = await fs.readFile(target)
+    // 확장자가 없는 TranscodedWallpaper는 JPEG다.
+    const mime = MIME[path.extname(target).toLowerCase()] ?? 'image/jpeg'
+    return `data:${mime};base64,${buffer.toString('base64')}`
+  } catch (error) {
+    log(`배경 이미지 읽기 실패: ${target}: ${error}`)
+    return null
+  }
+}
+
+/** 현재 바탕화면 그림의 경로 */
+async function wallpaperPath(): Promise<string | null> {
+  if (process.platform !== 'win32') return null
+
+  const fromRegistry = await new Promise<string | null>((resolve) => {
+    execFile('reg', ['query', 'HKCU\\Control Panel\\Desktop', '/v', 'WallPaper'], (error, stdout) => {
+      if (error) return resolve(null)
+      const match = stdout.match(/WallPaper\s+REG_SZ\s+(.+)/)
+      resolve(match ? match[1].trim() : null)
+    })
+  })
+  if (fromRegistry && existsSync(fromRegistry)) return fromRegistry
+
+  // 테마·슬라이드쇼를 쓰면 레지스트리 경로가 비거나 낡아 있다. 실제로 그려지는
+  // 그림은 항상 여기에 복사되어 있다.
+  const transcoded = path.join(
+    app.getPath('appData'),
+    'Microsoft',
+    'Windows',
+    'Themes',
+    'TranscodedWallpaper',
+  )
+  return existsSync(transcoded) ? transcoded : null
+}
+
 /* ------------------------------------------------------------------ IPC */
 
 function registerIpc() {
@@ -544,6 +593,22 @@ function registerIpc() {
   ipcMain.handle('app:workarea', () => screen.getPrimaryDisplay().workArea)
 
   ipcMain.handle('app:version', () => app.getVersion())
+
+  ipcMain.handle('wallpaper:get', async () => {
+    const target = await wallpaperPath()
+    return target ? readImageDataUrl(target) : null
+  })
+
+  ipcMain.handle('image:read', (_e, target: string) => readImageDataUrl(target))
+
+  ipcMain.handle('dialog:pickImage', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '유리 모드 배경으로 쓸 이미지 선택',
+      filters: [{ name: '이미지', extensions: ['jpg', 'jpeg', 'png', 'bmp', 'webp'] }],
+      properties: ['openFile'],
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
   ipcMain.handle('update:check', () => checkForUpdate(true))
   ipcMain.handle('update:apply', () => applyUpdate())
 
