@@ -610,7 +610,10 @@ function registerIpc() {
     return result.canceled ? null : result.filePaths[0]
   })
   ipcMain.handle('update:check', () => checkForUpdate(true))
-  ipcMain.handle('update:apply', () => applyUpdate())
+  ipcMain.handle('update:install', () => installUpdate())
+  ipcMain.handle('update:openPage', () =>
+    shell.openExternal(`https://github.com/${UPDATE_REPO}/releases/latest`),
+  )
 
   ipcMain.on('app:quit', () => {
     quitting = true
@@ -660,6 +663,8 @@ async function checkForUpdate(manual = false) {
       updateInfo = { version: latest, url: asset.browser_download_url }
       log(`업데이트 발견: v${latest}`)
       win?.webContents.send('update:available', latest)
+      // 사용자가 뭘 누르길 기다리지 않는다 — 바로 받아둔다.
+      void prepareUpdate()
     } else if (manual) {
       win?.webContents.send('update:none', app.getVersion())
     }
@@ -679,20 +684,68 @@ async function findAppDir(extracted: string): Promise<string | null> {
   return null
 }
 
-async function applyUpdate(): Promise<boolean> {
-  if (!updateInfo || updating) return false
-  updating = true
+/** 받아서 풀어둔 새 버전 폴더 (설치 준비 완료 상태) */
+let staged: { version: string; dir: string } | null = null
+
+/** 재시작을 미뤘을 때 다음 실행에서 이어받기 위한 표시 */
+const PENDING_FILE = path.join(app.getPath('userData'), 'pending-update.json')
+
+function readPending(): { version: string; dir: string } | null {
   try {
+    const data = JSON.parse(readFileSync(PENDING_FILE, 'utf8'))
+    return typeof data?.version === 'string' && typeof data?.dir === 'string' ? data : null
+  } catch {
+    return null
+  }
+}
+
+function clearPending() {
+  try {
+    unlinkSync(PENDING_FILE)
+  } catch {
+    /* 없으면 그만 */
+  }
+}
+
+/**
+ * 미뤄둔 업데이트가 있으면 창을 띄우기 전에 적용한다.
+ * '나중에'를 누른 사용자는 다음에 켤 때 새 버전으로 시작하게 된다.
+ */
+function applyPendingUpdate(): boolean {
+  const pending = readPending()
+  if (!pending) return false
+  if (cmpVersion(pending.version, app.getVersion()) <= 0 || !existsSync(pending.dir)) {
+    // 이미 적용됐거나 임시 폴더가 청소됐다.
+    clearPending()
+    return false
+  }
+  staged = pending
+  log(`미뤄둔 업데이트 적용: v${pending.version}`)
+  return installUpdate()
+}
+
+/**
+ * 새 버전을 내려받아 압축을 풀어둔다. 여기까지는 실행 중인 앱에 영향이 없다.
+ * 실제 교체는 앱을 끄고 나서(installUpdate) 이뤄진다.
+ */
+async function prepareUpdate(): Promise<boolean> {
+  if (!updateInfo || updating || staged?.version === updateInfo.version) return false
+  updating = true
+  const info = updateInfo
+  try {
+    win?.webContents.send('update:progress', { version: info.version, phase: 'download' })
+
     const workDir = path.join(app.getPath('temp'), 'deskfield-update')
     await fs.rm(workDir, { recursive: true, force: true })
     await fs.mkdir(workDir, { recursive: true })
 
-    log(`업데이트 내려받는 중: v${updateInfo.version}`)
-    const res = await fetch(updateInfo.url)
+    log(`업데이트 내려받는 중: v${info.version}`)
+    const res = await fetch(info.url)
     if (!res.ok) throw new Error(`다운로드 HTTP ${res.status}`)
     const zipPath = path.join(workDir, 'update.zip')
     await fs.writeFile(zipPath, Buffer.from(await res.arrayBuffer()))
 
+    win?.webContents.send('update:progress', { version: info.version, phase: 'extract' })
     const extracted = path.join(workDir, 'app')
     await new Promise<void>((resolve, reject) => {
       execFile(
@@ -703,6 +756,7 @@ async function applyUpdate(): Promise<boolean> {
           '-Command',
           `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${extracted}' -Force`,
         ],
+        { windowsHide: true },
         (error) => (error ? reject(error) : resolve()),
       )
     })
@@ -710,30 +764,55 @@ async function applyUpdate(): Promise<boolean> {
     const appDir = await findAppDir(extracted)
     if (!appDir) throw new Error('압축 안에서 DeskField.exe를 찾지 못했다')
 
-    // 실행 중인 파일은 덮어쓸 수 없으니, 앱을 끄고 나서 스크립트가 교체·재실행한다.
+    staged = { version: info.version, dir: appDir }
+    try {
+      writeFileSync(PENDING_FILE, JSON.stringify(staged), 'utf8')
+    } catch (error) {
+      log(`업데이트 표시 저장 실패: ${error}`)
+    }
+    log(`업데이트 준비 완료: v${info.version}`)
+    win?.webContents.send('update:ready', info.version)
+    return true
+  } catch (error) {
+    log(`업데이트 준비 실패: ${error}`)
+    win?.webContents.send('update:failed', `${error}`)
+    return false
+  } finally {
+    updating = false
+  }
+}
+
+/**
+ * 받아둔 버전으로 교체하고 다시 실행한다. 실행 중인 파일은 덮어쓸 수 없어서
+ * 앱을 끈 뒤 스크립트가 교체·재실행을 맡는다.
+ */
+function installUpdate(): boolean {
+  if (!staged) return false
+  try {
     const dest = path.dirname(app.getPath('exe'))
-    const script = path.join(workDir, 'apply.cmd')
-    await fs.writeFile(
+    const script = path.join(app.getPath('temp'), 'deskfield-update', 'apply.cmd')
+    writeFileSync(
       script,
       [
         '@echo off',
         'chcp 65001 >nul',
         'ping -n 4 127.0.0.1 >nul',
-        `robocopy "${appDir}" "${dest}" /E /NFL /NDL /NJH /NJS /R:3 /W:1`,
+        `robocopy "${staged.dir}" "${dest}" /E /NFL /NDL /NJH /NJS /R:3 /W:1`,
+        'if errorlevel 8 exit /b 1',
         `start "" "${path.join(dest, 'DeskField.exe')}"`,
       ].join('\r\n'),
       'utf8',
     )
-    log(`업데이트 적용: ${dest} 교체 후 재시작`)
+    log(`업데이트 설치: v${staged.version} → ${dest}`)
+    clearPending()
     spawn('cmd.exe', ['/c', script], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
     quitting = true
+    unhideAllSync('업데이트 재시작')
     app.quit()
     return true
   } catch (error) {
-    log(`업데이트 적용 실패: ${error}`)
-    updating = false
-    // 자동 적용이 막힌 환경이면 릴리스 페이지라도 열어준다.
-    void shell.openExternal(`https://github.com/${UPDATE_REPO}/releases/latest`)
+    log(`업데이트 설치 실패: ${error}`)
+    win?.webContents.send('update:failed', `${error}`)
     return false
   }
 }
@@ -795,6 +874,9 @@ app.whenReady().then(() => {
       log(`자동 시작 설정 실패: ${error}`)
     }
   }
+
+  // 미뤄둔 업데이트가 있으면 창을 만들기 전에 적용하고 재시작한다.
+  if (applyPendingUpdate()) return
 
   registerIpc()
   log('IPC 등록 완료')

@@ -499,8 +499,9 @@ body,
   z-index: 60;
 }
 
-.df-update__busy {
-  color: #6a6780;
+.df-update__dim {
+  color: #8a879c;
+  font-weight: 500;
 }
 
 .df-version {

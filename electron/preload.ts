@@ -95,7 +95,8 @@ const api = {
   quit: () => ipcRenderer.send('app:quit'),
 
   checkUpdate: () => ipcRenderer.invoke('update:check') as Promise<void>,
-  applyUpdate: () => ipcRenderer.invoke('update:apply') as Promise<boolean>,
+  installUpdate: () => ipcRenderer.invoke('update:install') as Promise<boolean>,
+  openReleasePage: () => ipcRenderer.invoke('update:openPage') as Promise<void>,
   onUpdateAvailable: (handler: (version: string) => void) => {
     const listener = (_e: unknown, version: string) => handler(version)
     ipcRenderer.on('update:available', listener)
@@ -108,6 +109,28 @@ const api = {
     ipcRenderer.on('update:none', listener)
     return () => {
       ipcRenderer.off('update:none', listener)
+    }
+  },
+  onUpdateProgress: (handler: (info: { version: string; phase: 'download' | 'extract' }) => void) => {
+    const listener = (_e: unknown, info: { version: string; phase: 'download' | 'extract' }) =>
+      handler(info)
+    ipcRenderer.on('update:progress', listener)
+    return () => {
+      ipcRenderer.off('update:progress', listener)
+    }
+  },
+  onUpdateReady: (handler: (version: string) => void) => {
+    const listener = (_e: unknown, version: string) => handler(version)
+    ipcRenderer.on('update:ready', listener)
+    return () => {
+      ipcRenderer.off('update:ready', listener)
+    }
+  },
+  onUpdateFailed: (handler: (reason: string) => void) => {
+    const listener = (_e: unknown, reason: string) => handler(reason)
+    ipcRenderer.on('update:failed', listener)
+    return () => {
+      ipcRenderer.off('update:failed', listener)
     }
   },
 

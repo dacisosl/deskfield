@@ -52,8 +52,13 @@ export default function App() {
   const [frontId, setFrontId] = useState<string | null>(null)
   const [pickerFor, setPickerFor] = useState<FieldItem | null>(null)
   const [renameFor, setRenameFor] = useState<FieldItem | null>(null)
-  const [updateVersion, setUpdateVersion] = useState<string | null>(null)
-  const [updateBusy, setUpdateBusy] = useState(false)
+  // 업데이트는 알아서 받고 알아서 설치한다. 사용자는 재시작 시점만 미룰 수 있다.
+  const [update, setUpdate] = useState<{
+    version: string
+    phase: 'found' | 'download' | 'extract' | 'ready' | 'failed'
+    reason?: string
+  } | null>(null)
+  const [restartIn, setRestartIn] = useState<number | null>(null)
   const [dimmed, setDimmed] = useState(false)
   const draftStart = useRef<{ x: number; y: number } | null>(null)
   const dimTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -140,13 +145,31 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const offAvailable = api.onUpdateAvailable((version) => setUpdateVersion(version))
-    const offNone = api.onUpdateNone(() => setToast({ text: '지금이 최신 버전이에요' }))
-    return () => {
-      offAvailable()
-      offNone()
-    }
+    const offs = [
+      api.onUpdateAvailable((version) => setUpdate({ version, phase: 'found' })),
+      api.onUpdateProgress((info) => setUpdate({ version: info.version, phase: info.phase })),
+      api.onUpdateReady((version) => {
+        setUpdate({ version, phase: 'ready' })
+        setRestartIn(15)
+      }),
+      api.onUpdateFailed((reason) =>
+        setUpdate((prev) => (prev ? { ...prev, phase: 'failed', reason } : prev)),
+      ),
+      api.onUpdateNone(() => setToast({ text: '지금이 최신 버전이에요' })),
+    ]
+    return () => offs.forEach((off) => off())
   }, [])
+
+  // 준비가 끝나면 카운트다운 후 스스로 재시작한다.
+  useEffect(() => {
+    if (restartIn === null) return
+    if (restartIn <= 0) {
+      void api.installUpdate()
+      return
+    }
+    const timer = setTimeout(() => setRestartIn((n) => (n === null ? null : n - 1)), 1000)
+    return () => clearTimeout(timer)
+  }, [restartIn])
 
   // 해상도가 바뀌면 화면 밖으로 나간 필드를 안으로 끌어온다.
   useEffect(() => {
@@ -639,37 +662,62 @@ export default function App() {
         </div>
       )}
 
-      {updateVersion && (
+      {update && (
         <div className="df-update" data-solid>
-          <span>
-            새 버전 <b>v{updateVersion}</b>이 나왔어요
-          </span>
-          {updateBusy ? (
-            <span className="df-update__busy">내려받는 중… 잠시 후 자동으로 다시 켜집니다</span>
-          ) : (
+          {update.phase === 'found' && <span>새 버전 v{update.version}을 확인했어요</span>}
+          {update.phase === 'download' && (
+            <span>
+              새 버전 v{update.version}을 받는 중이에요… <b className="df-update__dim">그냥 쓰셔도 됩니다</b>
+            </span>
+          )}
+          {update.phase === 'extract' && <span>v{update.version} 설치 준비 중이에요…</span>}
+
+          {update.phase === 'ready' && (
             <>
+              <span>
+                v{update.version} 준비 완료 —{' '}
+                <b>{restartIn ?? 0}초</b> 뒤 자동으로 다시 시작합니다
+              </span>
+              <button type="button" className="df-btn df-btn--go" onClick={() => setRestartIn(0)}>
+                지금 재시작
+              </button>
               <button
                 type="button"
-                className="df-btn df-btn--go"
-                onClick={async () => {
-                  setUpdateBusy(true)
-                  const ok = await api.applyUpdate()
-                  if (!ok) {
-                    setUpdateBusy(false)
-                    setToast({ text: '자동 적용에 실패해서 다운로드 페이지를 열었어요' })
-                    setUpdateVersion(null)
-                  }
+                className="df-btn df-btn--ghost"
+                onClick={() => {
+                  // 미루면 다음 실행 때 자동으로 적용된다.
+                  setRestartIn(null)
+                  setUpdate(null)
+                  setToast({ text: '다음에 앱을 켤 때 새 버전으로 시작합니다' })
                 }}
               >
-                지금 업데이트
-              </button>
-              <button type="button" className="df-btn df-btn--ghost" onClick={() => setUpdateVersion(null)}>
                 나중에
+              </button>
+            </>
+          )}
+
+          {update.phase === 'failed' && (
+            <>
+              <span>업데이트를 받지 못했어요</span>
+              <button
+                type="button"
+                className="df-btn df-btn--ghost"
+                onClick={() => void api.openReleasePage()}
+              >
+                직접 받기
+              </button>
+              <button
+                type="button"
+                className="df-btn df-btn--ghost"
+                onClick={() => setUpdate(null)}
+              >
+                닫기
               </button>
             </>
           )}
         </div>
       )}
+
     </div>
   )
 }

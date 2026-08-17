@@ -213,7 +213,7 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
               필드 반듯하게 배치
             </button>
             <button type="button" className="df-btn df-btn--ghost" onClick={() => void api.checkUpdate()}>
-              업데이트 확인
+              지금 업데이트 확인
             </button>
             <button type="button" className="df-btn df-btn--ghost" onClick={() => api.quit()}>
               앱 종료
@@ -222,6 +222,9 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
           </div>
 
           <p className="df-hint">
+            새 버전은 <b>알아서 받아서 설치</b>합니다 — 준비되면 알려주고 잠시 뒤 스스로 다시
+            시작합니다. 위 버튼은 기다리지 않고 바로 확인할 때만 쓰세요.
+            <br />
             단축키 — <b>Ctrl+Alt+D</b> 편집 모드, <b>Ctrl+Alt+H</b> 필드 숨기기/보이기.
             <br />
             필드 밖 빈 자리는 그대로 바탕화면입니다. 원래 쓰던 아이콘과 우클릭 메뉴를 그대로 쓸 수
