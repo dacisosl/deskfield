@@ -13,15 +13,20 @@ import {
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import {
   appendFileSync,
+  createWriteStream,
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
   watch,
   writeFileSync,
   promises as fs,
 } from 'node:fs'
 import path from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { extractZip } from './unzip'
 
 // CommonJS로 번들된다. Windows에서 asar 안의 ESM 진입점을 읽지 못하는 문제가 있어
 // 메인 프로세스는 CJS로 고정한다 (__dirname을 그대로 쓸 수 있다).
@@ -793,30 +798,27 @@ async function prepareUpdate(): Promise<boolean> {
     await fs.rm(workDir, { recursive: true, force: true })
     await fs.mkdir(workDir, { recursive: true })
 
-    log(`업데이트 내려받는 중: v${info.version}`)
+    log(`업데이트 내려받는 중: v${info.version} (${info.url})`)
+    const started = Date.now()
     const res = await fetch(info.url)
     if (!res.ok) throw new Error(`다운로드 HTTP ${res.status}`)
+    if (!res.body) throw new Error('다운로드 응답이 비어 있습니다')
+
+    // 통째로 메모리에 올리지 않고 흘려 쓴다 (130MB짜리라 차이가 크다).
     const zipPath = path.join(workDir, 'update.zip')
-    await fs.writeFile(zipPath, Buffer.from(await res.arrayBuffer()))
+    await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(zipPath))
+    const zipBytes = statSync(zipPath).size
+    log(`내려받기 완료: ${(zipBytes / 1048576).toFixed(1)}MB, ${Date.now() - started}ms`)
+    if (zipBytes < 1_000_000) throw new Error(`받은 파일이 너무 작습니다 (${zipBytes} bytes)`)
 
     win?.webContents.send('update:progress', { version: info.version, phase: 'extract' })
     const extracted = path.join(workDir, 'app')
-    await new Promise<void>((resolve, reject) => {
-      execFile(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${extracted}' -Force`,
-        ],
-        { windowsHide: true },
-        (error) => (error ? reject(error) : resolve()),
-      )
-    })
+    const unzipStarted = Date.now()
+    await extractZip(zipPath, extracted)
+    log(`압축 해제 완료: ${Date.now() - unzipStarted}ms`)
 
     const appDir = await findAppDir(extracted)
-    if (!appDir) throw new Error('압축 안에서 DeskField.exe를 찾지 못했다')
+    if (!appDir) throw new Error('압축 안에서 DeskField.exe를 찾지 못했습니다')
 
     staged = { version: info.version, dir: appDir }
     try {
@@ -845,13 +847,15 @@ function installUpdate(): boolean {
   try {
     const dest = path.dirname(app.getPath('exe'))
     const script = path.join(app.getPath('temp'), 'deskfield-update', 'apply.cmd')
+    const swapLog = path.join(app.getPath('userData'), 'update-swap.log')
     writeFileSync(
       script,
       [
         '@echo off',
         'chcp 65001 >nul',
         'ping -n 4 127.0.0.1 >nul',
-        `robocopy "${staged.dir}" "${dest}" /E /NFL /NDL /NJH /NJS /R:3 /W:1`,
+        `robocopy "${staged.dir}" "${dest}" /E /NFL /NDL /NJH /NJS /R:3 /W:1 >> "${swapLog}" 2>&1`,
+        `echo robocopy exit=%errorlevel% >> "${swapLog}"`,
         // 교체가 실패해도 앱은 반드시 다시 띄운다 — 실패했다고 앱이 사라지면 안 된다.
         `start "" "${path.join(dest, 'DeskField.exe')}"`,
       ].join('\r\n'),
