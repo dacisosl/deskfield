@@ -7,6 +7,8 @@ export interface FieldItem {
   kind: ItemKind
   /** 사용자가 고른 아이콘(이모지). 있으면 OS 아이콘 대신 이걸 그린다. */
   emoji?: string
+  /** 아이콘을 단순한 흑백 그림으로 표시 */
+  mono?: boolean
   /** 경로가 사라진 항목. 지우지 않고 흐리게 표시해서 사용자가 직접 정리하게 둔다. */
   missing?: boolean
 }
@@ -42,6 +44,10 @@ export interface Settings {
   locked: boolean
   /** 8px 격자에 맞춰 정렬 */
   snap: boolean
+  /** 필드 안 아이콘 사이 여백(px) */
+  iconGap: number
+  /** 자동 배치·반듯하게 배치에서 필드 사이 여백(px) */
+  fieldGap: number
   /** 항목 이름 표시 */
   labels: boolean
   /** 필드에 담은 항목의 바탕화면 원본을 숨겨 '이동'처럼 보이게 한다 */
@@ -55,7 +61,7 @@ export interface Settings {
 }
 
 export interface AppState {
-  version: 1
+  version: number
   fields: Field[]
   settings: Settings
 }
@@ -66,6 +72,8 @@ export const DEFAULT_SETTINGS: Settings = {
   tile: 92,
   locked: false,
   snap: true,
+  iconGap: 8,
+  fieldGap: 24,
   labels: true,
   hideOriginals: true,
   showBar: true,

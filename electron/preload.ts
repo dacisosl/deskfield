@@ -12,7 +12,6 @@ export type ScanEntry = {
 export type Rect = { x: number; y: number; width: number; height: number }
 
 const commands = [
-  'cmd:toggle-edit',
   'cmd:new-field',
   'cmd:scan',
   'cmd:settings',
@@ -80,7 +79,9 @@ const api = {
     }
   },
 
-  setIgnoreMouse: (ignore: boolean) => ipcRenderer.send('mouse:ignore', ignore),
+  setCapture: (capture: boolean) => ipcRenderer.send('mouse:capture', capture),
+  updateSolidRects: (rects: { x: number; y: number; w: number; h: number }[]) =>
+    ipcRenderer.send('rects:update', rects),
   setFocusable: (focusable: boolean) => ipcRenderer.send('focus:set', focusable),
 
   getAutostart: () => ipcRenderer.invoke('autostart:get') as Promise<boolean>,

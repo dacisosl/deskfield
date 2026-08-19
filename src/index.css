@@ -297,6 +297,12 @@ body,
   line-height: 1;
 }
 
+/* 단순한 흑백 그림 버전 — 같은 이모지를 진한 단색 실루엣으로 */
+.df-tile__emoji--mono,
+.df-picker__grid--mono button {
+  filter: grayscale(1) brightness(0.35) contrast(1.6);
+}
+
 .df-tile__name {
   width: 100%;
   font-size: 11px;
@@ -307,6 +313,30 @@ body,
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   word-break: break-all;
+}
+
+/* 오른쪽 아래 크기조절 그립 — 흐릿하게 있다가 필드에 마우스를 올리면 진해진다 */
+.df-grip {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 13px;
+  height: 13px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.28;
+  transition: opacity 0.15s ease;
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    currentColor 3px 4.5px
+  );
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  border-bottom-right-radius: 10px;
+}
+
+.df-field:hover .df-grip {
+  opacity: 0.6;
 }
 
 /* ------------------------------------------------------------------ 크기 조절 손잡이 */

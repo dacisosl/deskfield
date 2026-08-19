@@ -8,7 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { api } from '../lib/api'
-import { GAP, PAD, clamp, columns, neededHeight, snapTo, tileHeight } from '../lib/layout'
+import { PAD, clamp, columns, neededHeight, snapTo, tileHeight } from '../lib/layout'
 import { pastel, rgba } from '../lib/palette'
 import { HEADER_H, MIN_H, MIN_W, type Field, type FieldItem, type Settings } from '../lib/types'
 import { ItemTile } from './ItemTile'
@@ -279,7 +279,7 @@ export const FieldBox = memo(function FieldBox({
           className="df-field__body"
           style={{
             padding: PAD,
-            gap: GAP,
+            gap: settings.iconGap,
             gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
             gridAutoRows: `${rowH}px`,
           }}
@@ -333,6 +333,9 @@ export const FieldBox = memo(function FieldBox({
           )}
         </div>
       )}
+
+      {/* 크기 조절이 된다는 걸 알려주는 흐릿한 그립 — 실제 조작은 손잡이가 받는다 */}
+      {!settings.locked && !field.collapsed && <span className="df-grip" aria-hidden />}
 
       {!settings.locked &&
         DIRS.map((dir) => (

@@ -119,7 +119,9 @@ export const ItemTile = memo(function ItemTile({
     >
       <span className="df-tile__icon">
         {item.emoji ? (
-          <span className="df-tile__emoji">{item.emoji}</span>
+          <span className={`df-tile__emoji ${item.mono ? 'df-tile__emoji--mono' : ''}`}>
+            {item.emoji}
+          </span>
         ) : item.kind === 'folder' ? (
           <FolderGlyph />
         ) : icon ? (

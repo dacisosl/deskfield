@@ -172,13 +172,19 @@ function createWindow() {
     reveal()
   })
 
-  // 어떤 이벤트도 오지 않는 경우를 대비한 마지막 방어선.
+  // 첫 페인트 전에 띄우면 그 시간만큼 흰 화면이 보인다 — 특히 첫 설치 직후는
+  // 보안 검사 때문에 로딩이 수십 초까지 늘어질 수 있다. ready-to-show(첫 페인트)를
+  // 기다리고, 마지막 방어선도 로딩이 끝났을 때만 작동시킨다.
   setTimeout(() => {
-    if (!win?.isVisible()) {
-      log('이벤트가 오지 않아 강제로 창을 띄운다')
-      reveal()
+    if (!win || win.isDestroyed() || win.isVisible()) return
+    if (win.webContents.isLoading()) {
+      log('아직 로딩 중 — 페인트를 기다린다')
+      win.webContents.once('did-finish-load', reveal)
+      return
     }
-  }, 2000)
+    log('이벤트가 오지 않아 강제로 창을 띄운다')
+    reveal()
+  }, 12000)
 }
 
 /** 창을 띄우고 나서 포커스를 받지 않도록 바꾼다 (순서가 중요하다). */
@@ -550,7 +556,13 @@ function registerIpc() {
       return { ok: true }
     } catch (error) {
       log(`휴지통 실패: ${target}: ${error}`)
-      return { ok: false, error: '휴지통으로 보내지 못했어요' }
+      const parseFail = `${error}`.includes('parse path')
+      return {
+        ok: false,
+        error: parseFail
+          ? '이 위치는 휴지통을 지원하지 않아요 (클라우드·네트워크 드라이브)'
+          : '휴지통으로 보내지 못했어요 (사용 중일 수 있어요)',
+      }
     }
   })
 
@@ -573,8 +585,17 @@ function registerIpc() {
     return result.canceled ? [] : result.filePaths
   })
 
-  ipcMain.on('mouse:ignore', (_e, ignore: boolean) => {
-    win?.setIgnoreMouseEvents(ignore, { forward: true })
+  // 통과 여부를 마우스 이벤트가 아니라 좌표로 판정한다.
+  // 이벤트 기반은 '통과 상태에서는 이벤트 자체가 안 온다'는 자기모순이 있어서,
+  // 바탕화면에서 파일을 끌어오면 창이 드롭 대상이 되지 못해 금지 표시가 떴다.
+  ipcMain.on('mouse:capture', (_e, capture: boolean) => {
+    rendererCapture = capture
+    applyMouseState()
+  })
+
+  ipcMain.on('rects:update', (_e, rects: SolidRect[]) => {
+    solidRects = Array.isArray(rects) ? rects : []
+    applyMouseState()
   })
 
   // 이름 입력처럼 키보드가 필요한 순간에만 잠깐 포커스를 받는다.
@@ -585,8 +606,15 @@ function registerIpc() {
   })
 
   ipcMain.handle('fs:setHiddenBatch', (_e, paths: string[], hidden: boolean) => {
-    restored = false
-    return setHiddenBatchSync(paths, hidden)
+    const roots = desktopRoots().map((root) => root.toLowerCase())
+    const safe = (Array.isArray(paths) ? paths : []).filter(
+      (target) =>
+        typeof target === 'string' &&
+        !target.startsWith('shell:') &&
+        roots.includes(path.dirname(target).toLowerCase()),
+    )
+    if (hidden) restored = false
+    return setHiddenBatchAsync(safe, hidden)
   })
 
   // 인자를 붙여 등록하면 조회할 때도 같은 인자를 줘야 매칭된다. 애초에
@@ -909,6 +937,31 @@ function installUpdate(): boolean {
   }
 }
 
+/* ------------------------------------------------------------------ 마우스 통과 판정 */
+
+type SolidRect = { x: number; y: number; w: number; h: number }
+
+let solidRects: SolidRect[] = []
+let rendererCapture = false
+let ignoreNow = true
+
+function cursorInSolid() {
+  if (!win) return false
+  const bounds = win.getBounds()
+  const point = screen.getCursorScreenPoint()
+  const x = point.x - bounds.x
+  const y = point.y - bounds.y
+  return solidRects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
+}
+
+function applyMouseState() {
+  if (!win || win.isDestroyed()) return
+  const ignore = !rendererCapture && !cursorInSolid()
+  if (ignore === ignoreNow) return
+  ignoreNow = ignore
+  win.setIgnoreMouseEvents(ignore, { forward: true })
+}
+
 /* ------------------------------------------------------------------ 포그라운드 감시 */
 
 /**
@@ -996,7 +1049,6 @@ function buildTray() {
   tray.setToolTip('바탕 필드')
 
   const menu = Menu.buildFromTemplate([
-    { label: '편집 모드 켜기/끄기  (Ctrl+Alt+D)', click: () => win?.webContents.send('cmd:toggle-edit') },
     { label: '필드 보이기/숨기기  (Ctrl+Alt+H)', click: toggleVisible },
     { type: 'separator' },
     { label: '새 필드 만들기', click: () => win?.webContents.send('cmd:new-field') },
@@ -1016,7 +1068,7 @@ function buildTray() {
   ])
 
   tray.setContextMenu(menu)
-  tray.on('click', () => win?.webContents.send('cmd:toggle-edit'))
+  tray.on('click', toggleVisible)
 }
 
 function toggleVisible() {
@@ -1074,8 +1126,10 @@ app.whenReady().then(() => {
     log(`트레이 등록 실패: ${error}`)
   }
 
-  globalShortcut.register('Control+Alt+D', () => win?.webContents.send('cmd:toggle-edit'))
   globalShortcut.register('Control+Alt+H', toggleVisible)
+
+  // 드래그 중에는 mousemove가 오지 않아도 커서는 움직인다 — 주기적으로 판정.
+  setInterval(applyMouseState, 90)
 
   setTimeout(() => void checkForUpdate(), 8000)
   setInterval(() => void checkForUpdate(), 6 * 60 * 60 * 1000)
@@ -1125,6 +1179,60 @@ function setHiddenBatchSync(paths: string[], hidden: boolean) {
       /* 임시 파일 정리 실패는 무시 */
     }
   }
+}
+
+/**
+ * 상호작용 중 숨김/복원 — 절대 메인을 막지 않는다.
+ * 소량은 attrib를 병렬로(시작이 빠르다), 대량은 PowerShell 한 번을 비동기로.
+ * 동기 버전(setHiddenBatchSync)은 종료 직전 전용이다.
+ */
+async function setHiddenBatchAsync(paths: string[], hidden: boolean): Promise<number> {
+  if (process.platform !== 'win32' || paths.length === 0) return 0
+  if (paths.length <= 8) {
+    await Promise.all(
+      paths.map(
+        (target) =>
+          new Promise<void>((resolve) => {
+            execFile('attrib', [hidden ? '+h' : '-h', target], { windowsHide: true }, () =>
+              resolve(),
+            )
+          }),
+      ),
+    )
+    return paths.length
+  }
+  return new Promise<number>((resolve) => {
+    const listFile = path.join(app.getPath('temp'), `deskfield-attrib-${Date.now()}.txt`)
+    try {
+      writeFileSync(listFile, paths.join('\n'), 'utf8')
+    } catch {
+      resolve(0)
+      return
+    }
+    const op = hidden
+      ? '$i.Attributes = $i.Attributes -bor [IO.FileAttributes]::Hidden'
+      : '$i.Attributes = $i.Attributes -band -bnot [IO.FileAttributes]::Hidden'
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$ErrorActionPreference='SilentlyContinue';` +
+          `Get-Content -LiteralPath '${listFile}' -Encoding UTF8 | ForEach-Object {` +
+          `if ($_ -ne '') { $i = Get-Item -LiteralPath $_ -Force; if ($i) { ${op} } } }`,
+      ],
+      { windowsHide: true, timeout: 15000 },
+      () => {
+        try {
+          unlinkSync(listFile)
+        } catch {
+          /* 정리 실패는 무시 */
+        }
+        resolve(paths.length)
+      },
+    )
+  })
 }
 
 /** 상태 파일에 담긴, 바탕화면 바로 아래의 실제 경로들 */

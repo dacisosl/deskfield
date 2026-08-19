@@ -33,12 +33,15 @@ const GROUPS: { label: string; emoji: string[] }[] = [
 interface Props {
   /** 현재 아이콘이 이모지인 항목이면 '기본 아이콘' 버튼을 보여준다 */
   showReset: boolean
-  onPick: (emoji: string) => void
+  onPick: (emoji: string, mono: boolean) => void
   onReset: () => void
   onClose: () => void
 }
 
+import { useState } from 'react'
+
 export function EmojiPicker({ showReset, onPick, onReset, onClose }: Props) {
+  const [mono, setMono] = useState(false)
   return (
     <div data-solid className="df-modal" onClick={onClose}>
       <div
@@ -48,19 +51,27 @@ export function EmojiPicker({ showReset, onPick, onReset, onClose }: Props) {
         <header className="df-modal__head">
           <h2>아이콘 고르기</h2>
           <p>이 항목을 필드에서 어떤 모양으로 보여줄지 고르세요.</p>
+          <div className="df-seg" style={{ marginTop: 8, alignSelf: 'flex-start' }}>
+            <button type="button" className={mono ? '' : 'df-seg__on'} onClick={() => setMono(false)}>
+              컬러
+            </button>
+            <button type="button" className={mono ? 'df-seg__on' : ''} onClick={() => setMono(true)}>
+              흑백
+            </button>
+          </div>
         </header>
 
         <div className="df-picker">
           {GROUPS.map((group) => (
             <section key={group.label}>
               <h3>{group.label}</h3>
-              <div className="df-picker__grid">
+              <div className={`df-picker__grid ${mono ? 'df-picker__grid--mono' : ''}`}>
                 {group.emoji.map((emoji) => (
                   <button
                     key={emoji}
                     type="button"
                     onClick={() => {
-                      onPick(emoji)
+                      onPick(emoji, mono)
                       onClose()
                     }}
                   >

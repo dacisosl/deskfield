@@ -98,6 +98,32 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
             <b>{settings.tile}px</b>
           </label>
 
+          <label className="df-row">
+            <span>아이콘 간격</span>
+            <input
+              type="range"
+              min={2}
+              max={24}
+              step={2}
+              value={settings.iconGap}
+              onChange={(e) => onChange({ iconGap: Number(e.target.value) })}
+            />
+            <b>{settings.iconGap}px</b>
+          </label>
+
+          <label className="df-row">
+            <span>필드 간격</span>
+            <input
+              type="range"
+              min={8}
+              max={48}
+              step={4}
+              value={settings.fieldGap}
+              onChange={(e) => onChange({ fieldGap: Number(e.target.value) })}
+            />
+            <b>{settings.fieldGap}px</b>
+          </label>
+
           <label className="df-row df-row--check">
             <input
               type="checkbox"

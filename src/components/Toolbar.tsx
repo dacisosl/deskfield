@@ -1,37 +1,19 @@
 interface Props {
-  editing: boolean
   locked: boolean
-  onToggleEdit: () => void
   onNewField: () => void
   onScan: () => void
   onToggleLock: () => void
   onSettings: () => void
 }
 
-export function Toolbar({
-  editing,
-  locked,
-  onToggleEdit,
-  onNewField,
-  onScan,
-  onToggleLock,
-  onSettings,
-}: Props) {
+export function Toolbar({ locked, onNewField, onScan, onToggleLock, onSettings }: Props) {
   return (
-    <div data-solid className={`df-bar ${editing ? 'df-bar--on' : ''}`}>
+    <div data-solid className="df-bar">
       <button type="button" className="df-bar__btn" onClick={onNewField} title="새 필드 (빈 곳에 만들기)">
         ＋
       </button>
       <button type="button" className="df-bar__btn" onClick={onScan} title="바탕화면 자동 정리">
         ✨
-      </button>
-      <button
-        type="button"
-        className={`df-bar__btn ${editing ? 'df-bar__btn--active' : ''}`}
-        onClick={onToggleEdit}
-        title="편집 모드 (Ctrl+Alt+D) — 빈 곳을 끌어 새 필드를 그립니다"
-      >
-        ✎
       </button>
       <button
         type="button"

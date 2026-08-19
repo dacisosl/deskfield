@@ -15,7 +15,7 @@ function isReal(item: Pick<FieldItem, 'path'>) {
   return !item.path.startsWith('shell:')
 }
 
-const EMPTY: AppState = { version: 1, fields: [], settings: DEFAULT_SETTINGS }
+const EMPTY: AppState = { version: 2, fields: [], settings: DEFAULT_SETTINGS }
 
 function basename(target: string) {
   const parts = target.split(/[\\/]/).filter(Boolean)
@@ -44,10 +44,15 @@ export function findSlot(fields: Field[], w: number, h: number, bounds: { w: num
 
 function migrate(raw: unknown): AppState {
   if (!raw || typeof raw !== 'object') return EMPTY
-  const state = raw as Partial<AppState>
+  const state = raw as Partial<AppState> & { version?: number }
+  let fields = Array.isArray(state.fields) ? state.fields.map(normalizeField) : []
+  // v2: 항목이 많으면 필드를 스크롤로 넘긴다 — 자동으로 키우던 기본값을 끈다.
+  if ((state.version ?? 1) < 2) {
+    fields = fields.map((field) => ({ ...field, autoGrow: false }))
+  }
   return {
-    version: 1,
-    fields: Array.isArray(state.fields) ? state.fields.map(normalizeField) : [],
+    version: 2,
+    fields,
     settings: { ...DEFAULT_SETTINGS, ...(state.settings ?? {}) },
   }
 }
@@ -58,7 +63,7 @@ function normalizeField(field: Field): Field {
     w: Math.max(MIN_W, field.w),
     h: Math.max(MIN_H, field.h),
     collapsed: !!field.collapsed,
-    autoGrow: field.autoGrow ?? true,
+    autoGrow: field.autoGrow ?? false,
     portal: typeof field.portal === 'string' ? field.portal : undefined,
     items: Array.isArray(field.items) ? field.items : [],
   }
@@ -203,7 +208,7 @@ export function useFields() {
               id,
               title: '새 필드',
               collapsed: false,
-              autoGrow: true,
+              autoGrow: false,
               items: [],
               color: 'white',
               ...init,
@@ -220,21 +225,37 @@ export function useFields() {
     [],
   )
 
+  /** 필드가 품던 원본들을 한 번에 되살린다 — 종료 복원과 같은 검증된 경로. */
+  const unhideItems = useCallback((items: FieldItem[]) => {
+    const paths = items.filter(isReal).map((item) => item.path)
+    if (paths.length > 0) void api.setHiddenBatch(paths, false)
+  }, [])
+
   const removeField = useCallback((id: string) => {
     const target = stateRef.current.fields.find((field) => field.id === id)
-    target?.items.filter(isReal).forEach((item) => void api.setHidden(item.path, false))
+    if (target && !target.portal) unhideItems(target.items)
     setState((prev) => ({ ...prev, fields: prev.fields.filter((field) => field.id !== id) }))
+    return target ?? null
+  }, [unhideItems])
+
+  /** 삭제 실행 취소 — 필드를 되살리고 원본을 다시 숨긴다. */
+  const restoreField = useCallback((field: Field) => {
+    setState((prev) => ({ ...prev, fields: [...prev.fields, field] }))
+    if (!field.portal && stateRef.current.settings.hideOriginals) {
+      const paths = field.items.filter(isReal).map((item) => item.path)
+      if (paths.length > 0) void api.setHiddenBatch(paths, true)
+    }
   }, [])
 
   /** 항목을 비우면 바탕화면 원본도 다시 보여준다. */
   const clearField = useCallback((id: string) => {
     const target = stateRef.current.fields.find((field) => field.id === id)
-    target?.items.filter(isReal).forEach((item) => void api.setHidden(item.path, false))
+    if (target && !target.portal) unhideItems(target.items)
     setState((prev) => ({
       ...prev,
       fields: prev.fields.map((field) => (field.id === id ? { ...field, items: [] } : field)),
     }))
-  }, [])
+  }, [unhideItems])
 
   /** 휴지통처럼 파일 경로가 없는 특수 타일 */
   const addSpecial = useCallback((fieldId: string, item: Omit<FieldItem, 'id'>) => {
@@ -277,7 +298,8 @@ export function useFields() {
     if (resolved.length === 0) return
 
     if (stateRef.current.settings.hideOriginals) {
-      resolved.filter(isReal).forEach((item) => void api.setHidden(item.path, true))
+      const paths = resolved.filter(isReal).map((item) => item.path)
+      if (paths.length > 0) void api.setHiddenBatch(paths, true)
     }
 
     setState((prev) => {
@@ -335,11 +357,12 @@ export function useFields() {
 
   const removeItems = useCallback((ids: string[]) => {
     const drop = new Set(ids)
-    for (const field of stateRef.current.fields) {
-      for (const item of field.items) {
-        if (drop.has(item.id) && isReal(item)) void api.setHidden(item.path, false)
-      }
-    }
+    unhideItems(
+      stateRef.current.fields
+        .filter((field) => !field.portal)
+        .flatMap((field) => field.items)
+        .filter((item) => drop.has(item.id)),
+    )
     setState((prev) => ({
       ...prev,
       fields: prev.fields.map((field) => ({
@@ -388,5 +411,6 @@ export function useFields() {
     setSettings,
     replaceFields,
     refreshPortal,
+    restoreField,
   }
 }

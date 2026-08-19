@@ -1,5 +1,5 @@
 import type React from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ContextMenu, type MenuSpec } from './components/ContextMenu'
 import { EmojiPicker } from './components/EmojiPicker'
 import { RenameDialog } from './components/RenameDialog'
@@ -10,16 +10,9 @@ import { Toolbar } from './components/Toolbar'
 import { useGlassBackdrop } from './hooks/useGlassBackdrop'
 import { usePassthrough } from './hooks/usePassthrough'
 import { api } from './lib/api'
-import { clamp, snapTo } from './lib/layout'
-import { MIN_H, MIN_W, type Field, type FieldItem, type Settings } from './lib/types'
+import { clamp } from './lib/layout'
+import type { Field, FieldItem, Settings } from './lib/types'
 import { useFields } from './state/useFields'
-
-interface Draft {
-  x: number
-  y: number
-  w: number
-  h: number
-}
 
 export default function App() {
   const {
@@ -39,15 +32,14 @@ export default function App() {
     setSettings,
     replaceFields,
     refreshPortal,
+    restoreField,
   } = useFields()
 
   const [bounds, setBounds] = useState({ w: window.innerWidth, h: window.innerHeight })
-  const [editing, setEditing] = useState(false)
   const [gesture, setGesture] = useState(false)
   const [menu, setMenu] = useState<MenuSpec | null>(null)
   const [scanning, setScanning] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [draft, setDraft] = useState<Draft | null>(null)
   const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null)
   const [frontId, setFrontId] = useState<string | null>(null)
   const [pickerFor, setPickerFor] = useState<FieldItem | null>(null)
@@ -61,11 +53,10 @@ export default function App() {
   } | null>(null)
   const [restartIn, setRestartIn] = useState<number | null>(null)
   const [dimmed, setDimmed] = useState(false)
-  const draftStart = useRef<{ x: number; y: number } | null>(null)
   const dimTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const modalOpen = scanning || showSettings || !!pickerFor || !!renameFor
-  const capture = editing || gesture || modalOpen || !!menu
+  const capture = gesture || modalOpen || !!menu
 
   const glass = useGlassBackdrop(
     state.settings.theme === 'glass',
@@ -120,6 +111,43 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  // 끌던 타일이 드롭으로 삭제되면 dragend를 보낼 주체가 사라져 gesture가
+  // true로 고정된다 — 창이 화면 전체를 계속 붙잡아 바탕화면 클릭이 죽는다.
+  // 드래그가 어떻게 끝나든 반드시 푼다.
+  useEffect(() => {
+    const release = () => setTimeout(() => setGesture(false), 0)
+    window.addEventListener('drop', release, true)
+    window.addEventListener('dragend', release, true)
+    window.addEventListener('pointerup', release, true)
+    return () => {
+      window.removeEventListener('drop', release, true)
+      window.removeEventListener('dragend', release, true)
+      window.removeEventListener('pointerup', release, true)
+    }
+  }, [])
+
+  // 단단한 영역(필드·메뉴·모달 …)의 좌표를 메인에 보고한다 — 통과 판정의 근거.
+  const lastRects = useRef('')
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const rects = Array.from(document.querySelectorAll<HTMLElement>('[data-solid]')).map((el) => {
+        const r = el.getBoundingClientRect()
+        return {
+          x: Math.round(r.x) - 8,
+          y: Math.round(r.y) - 8,
+          w: Math.round(r.width) + 16,
+          h: Math.round(r.height) + 16,
+        }
+      })
+      const key = JSON.stringify(rects)
+      if (key !== lastRects.current) {
+        lastRects.current = key
+        api.updateSolidRects(rects)
+      }
+    }, 60)
+    return () => clearTimeout(timer)
+  })
+
   useEffect(() => {
     if (!toast) return
     const timer = setTimeout(() => setToast(null), toast.action ? 6000 : 2600)
@@ -141,7 +169,6 @@ export default function App() {
   // 트레이 메뉴·단축키에서 오는 명령
   useEffect(() => {
     return api.onCommand((command) => {
-      if (command === 'cmd:toggle-edit') setEditing((prev) => !prev)
       if (command === 'cmd:new-field') newField()
       if (command === 'cmd:scan') setScanning(true)
       if (command === 'cmd:settings') setShowSettings(true)
@@ -348,8 +375,8 @@ export default function App() {
   )
 
   const tidy = useCallback(() => {
-    const gapX = 24
-    const gapY = 24
+    const gapX = stateRef.current.settings.fieldGap
+    const gapY = stateRef.current.settings.fieldGap
     let x = gapX
     let y = gapY
     let rowH = 0
@@ -367,7 +394,7 @@ export default function App() {
       }),
     )
     setShowSettings(false)
-  }, [bounds.h, bounds.w, replaceFields])
+  }, [bounds.h, bounds.w, replaceFields, stateRef])
 
   const fieldMenu = useCallback((field: Field, x: number, y: number) => {
     if (field.portal) {
@@ -385,7 +412,19 @@ export default function App() {
           { label: '', separator: true },
           { label: field.collapsed ? '펼치기' : '접기', onSelect: () => patchField(field.id, { collapsed: !field.collapsed }) },
           { label: '', separator: true },
-          { label: '필드 삭제', danger: true, onSelect: () => removeField(field.id) },
+          {
+            label: '필드 삭제',
+            danger: true,
+            onSelect: () => {
+              const removed = removeField(field.id)
+              if (removed) {
+                setToast({
+                  text: `"${removed.title}" 필드를 삭제했어요`,
+                  action: { label: '실행 취소', run: () => restoreField(removed) },
+                })
+              }
+            },
+          },
         ],
       })
       return
@@ -438,10 +477,22 @@ export default function App() {
           label: '항목 모두 비우기',
           onSelect: () => clearField(field.id),
         },
-        { label: '필드 삭제', danger: true, onSelect: () => removeField(field.id) },
+        {
+          label: '필드 삭제',
+          danger: true,
+          onSelect: () => {
+            const removed = removeField(field.id)
+            if (removed) {
+              setToast({
+                text: `"${removed.title || '이름 없는'}" 필드를 삭제했어요`,
+                action: { label: '실행 취소', run: () => restoreField(removed) },
+              })
+            }
+          },
+        },
       ],
     })
-  }, [addPaths, addSpecial, clearField, newFolderIn, patchField, refreshPortal, removeField, sortField])
+  }, [addPaths, addSpecial, clearField, newFolderIn, patchField, refreshPortal, removeField, restoreField, sortField])
 
   const itemMenu = useCallback((item: FieldItem, x: number, y: number) => {
     const special = item.path.startsWith('shell:')
@@ -530,48 +581,10 @@ export default function App() {
     [addPaths, moveItem, refreshPortal, removeItems, stateRef],
   )
 
-  /** 편집 모드에서 빈 곳을 끌면 그 크기대로 새 필드를 만든다. */
-  function startDraft(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!editing || event.button !== 0 || state.settings.locked) return
-    if ((event.target as HTMLElement).closest('[data-solid]')) return
-    event.currentTarget.setPointerCapture(event.pointerId)
-    draftStart.current = { x: event.clientX, y: event.clientY }
-    setDraft({ x: event.clientX, y: event.clientY, w: 0, h: 0 })
-  }
-
-  function moveDraft(event: ReactPointerEvent<HTMLDivElement>) {
-    const start = draftStart.current
-    if (!start) return
-    const snap = state.settings.snap
-    const x = snapTo(Math.min(start.x, event.clientX), snap)
-    const y = snapTo(Math.min(start.y, event.clientY), snap)
-    setDraft({
-      x,
-      y,
-      w: snapTo(Math.abs(event.clientX - start.x), snap),
-      h: snapTo(Math.abs(event.clientY - start.y), snap),
-    })
-  }
-
-  function endDraft() {
-    const box = draft
-    draftStart.current = null
-    setDraft(null)
-    if (!box) return
-    if (box.w < MIN_W || box.h < MIN_H) return
-    addField({ x: box.x, y: box.y, w: box.w, h: box.h }, bounds)
-  }
-
   return (
     <div
-      className={`df-root ${editing ? 'df-root--edit' : ''} ${
-        dimmed && state.settings.dimIdle ? 'df-root--dim' : ''
-      }`}
+      className={`df-root ${dimmed && state.settings.dimIdle ? 'df-root--dim' : ''}`}
       style={{ ['--dim' as string]: String(state.settings.dimLevel) } as React.CSSProperties}
-      onPointerDown={startDraft}
-      onPointerMove={moveDraft}
-      onPointerUp={endDraft}
-      onPointerCancel={endDraft}
       onDragOver={(event) => {
         // 필드 밖으로 끌고 나온 타일 — 놓으면 필드에서 뺀다
         if (event.dataTransfer.types.includes('application/x-deskfield-item')) {
@@ -612,21 +625,9 @@ export default function App() {
         />
       ))}
 
-      {draft && (
-        <div className="df-draft" style={{ left: draft.x, top: draft.y, width: draft.w, height: draft.h }} />
-      )}
-
-      {editing && (
-        <p className="df-editnote" data-solid>
-          편집 모드 — 빈 곳을 드래그하면 필드가 만들어집니다. 끝내려면 Ctrl+Alt+D 또는 ✎ 버튼.
-        </p>
-      )}
-
       {state.settings.showBar && (
       <Toolbar
-        editing={editing}
         locked={state.settings.locked}
-        onToggleEdit={() => setEditing((prev) => !prev)}
         onNewField={newField}
         onScan={() => setScanning(true)}
         onToggleLock={() => setSettings({ locked: !state.settings.locked })}
@@ -660,7 +661,7 @@ export default function App() {
       {pickerFor && (
         <EmojiPicker
           showReset={!!pickerFor.emoji}
-          onPick={(emoji) => updateItem(pickerFor.id, { emoji })}
+          onPick={(emoji, mono) => updateItem(pickerFor.id, { emoji, mono: mono || undefined })}
           onReset={() => updateItem(pickerFor.id, { emoji: undefined })}
           onClose={() => setPickerFor(null)}
         />

@@ -19,23 +19,15 @@ const count = () => app.evaluate('document.querySelectorAll(".df-field").length'
 const before = await count()
 console.log('자동 정리 후 필드:', before)
 
-/* 1) 편집 모드에서 빈 곳을 끌어 새 필드 만들기 */
-await app.evaluate('document.querySelectorAll(".df-bar__btn")[2].click(), true')
-await wait(300)
-console.log('편집 모드:', await app.evaluate('!!document.querySelector(".df-root--edit")'))
-
-await app.drag({ x: 820, y: 640 }, { x: 1120, y: 860 })
-await wait(300)
+/* 1) ＋ 버튼으로 새 필드 만들기 */
+await app.evaluate('document.querySelectorAll(".df-bar__btn")[0].click(), true')
+await wait(400)
 const drawn = await app.evaluate(`(() => {
   const f = [...document.querySelectorAll('.df-field')].pop()
   const r = f.getBoundingClientRect()
   return { title: f.querySelector('.df-field__title').value, w: Math.round(r.width), h: Math.round(r.height) }
 })()`)
-console.log('그려진 필드:', drawn, '(총', await count(), '개)')
-
-// 편집 모드 끄기
-await app.evaluate('document.querySelectorAll(".df-bar__btn")[2].click(), true')
-await wait(200)
+console.log('새 필드:', drawn, '(총', await count(), '개)')
 
 /* 2) 타일을 다른 필드로 끌어 옮기기 */
 const moveResult = await app.evaluate(`(() => {
@@ -73,7 +65,7 @@ await app.shoot(out)
 console.log('스크린샷:', out)
 
 const checks = [
-  ['필드 그리기', (await count()) === before + 1 && drawn.w > 250 && drawn.h > 180],
+  ['필드 만들기', (await count()) === before + 1 && drawn.w > 250 && drawn.h > 180],
   ['항목 이동', after.from === moveResult.beforeFrom - 1 && after.to.includes(moveResult.name)],
 ]
 for (const [label, ok] of checks) console.log(`${ok ? '통과' : '실패'} — ${label}`)
