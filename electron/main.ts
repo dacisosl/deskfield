@@ -206,6 +206,20 @@ function syncWorkArea() {
   win.webContents.send('workarea:changed', workArea)
 }
 
+/**
+ * 모니터를 꽂거나 뽑으면 Windows가 이 신호를 여러 번, 그것도 작업 표시줄이
+ * 자리를 잡기 전 크기로 보낸다. 잠잠해진 뒤의 한 번만 렌더러에 전한다 —
+ * 중간 크기에 맞춰 필드를 배치해 버리면 그게 그대로 남는다.
+ */
+let workAreaTimer: NodeJS.Timeout | null = null
+function scheduleWorkAreaSync() {
+  if (workAreaTimer) clearTimeout(workAreaTimer)
+  workAreaTimer = setTimeout(() => {
+    workAreaTimer = null
+    syncWorkArea()
+  }, 700)
+}
+
 /* ------------------------------------------------------------------ 상태 저장 */
 
 async function readState(): Promise<unknown | null> {
@@ -1119,9 +1133,9 @@ app.whenReady().then(() => {
   setTimeout(() => void checkForUpdate(), 8000)
   setInterval(() => void checkForUpdate(), 6 * 60 * 60 * 1000)
 
-  screen.on('display-metrics-changed', syncWorkArea)
-  screen.on('display-added', syncWorkArea)
-  screen.on('display-removed', syncWorkArea)
+  screen.on('display-metrics-changed', scheduleWorkAreaSync)
+  screen.on('display-added', scheduleWorkAreaSync)
+  screen.on('display-removed', scheduleWorkAreaSync)
 })
 
 app.on('window-all-closed', () => {

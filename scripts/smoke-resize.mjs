@@ -75,7 +75,8 @@ const vh = await app.evaluate('window.innerHeight')
 const expectedH = Math.min(narrow.h + 130, vh - narrow.y)
 
 const checks = [
-  ['이동', moved.x < start.x - 100 && moved.y > start.y + 100],
+  // 끈 만큼 따라왔는가 — 시작 자리는 자동 배치에 따라 달라지므로 목표점과 견준다.
+  ['이동', Math.abs(moved.x - target.x) <= 8 && Math.abs(moved.y - target.y) <= 8],
   ['폭 줄이기', narrow.w < moved.w - 60],
   ['열 재배치', narrow.cols < moved.cols],
   ['높이 늘리기(화면 안에서)', Math.abs(taller.h - expectedH) <= 10 && taller.h > narrow.h],

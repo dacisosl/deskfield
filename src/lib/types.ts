@@ -60,10 +60,26 @@ export interface Settings {
   showBar: boolean
 }
 
+/** 필드 하나가 차지하는 자리 */
+export interface Spot {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 화면 크기별로 기억해 두는 배치 — 모니터를 다시 꽂으면 쓰던 자리로 돌아간다. */
+export interface LayoutSnapshot {
+  key: string
+  spots: Record<string, Spot>
+}
+
 export interface AppState {
   version: number
   fields: Field[]
   settings: Settings
+  /** 화면 크기별 배치. 최근 것부터 앞에 온다. */
+  layouts: LayoutSnapshot[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {

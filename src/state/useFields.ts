@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { MAX_LAYOUTS } from '../lib/arrange'
 import {
   DEFAULT_SETTINGS,
   MIN_H,
@@ -7,6 +8,7 @@ import {
   type AppState,
   type Field,
   type FieldItem,
+  type LayoutSnapshot,
   type Settings,
   uid,
 } from '../lib/types'
@@ -15,7 +17,7 @@ function isReal(item: Pick<FieldItem, 'path'>) {
   return !item.path.startsWith('shell:')
 }
 
-const EMPTY: AppState = { version: 3, fields: [], settings: DEFAULT_SETTINGS }
+const EMPTY: AppState = { version: 4, fields: [], settings: DEFAULT_SETTINGS, layouts: [] }
 
 function basename(target: string) {
   const parts = target.split(/[\\/]/).filter(Boolean)
@@ -62,9 +64,10 @@ function migrate(raw: unknown): AppState {
     }))
   }
   return {
-    version: 3,
+    version: 4,
     fields,
     settings: { ...DEFAULT_SETTINGS, ...(state.settings ?? {}) },
+    layouts: Array.isArray(state.layouts) ? state.layouts.slice(0, MAX_LAYOUTS) : [],
   }
 }
 
@@ -397,6 +400,11 @@ export function useFields() {
     }))
   }, [])
 
+  /** 화면 크기별 배치 기억을 갈아 끼운다. */
+  const setLayouts = useCallback((updater: (layouts: LayoutSnapshot[]) => LayoutSnapshot[]) => {
+    setState((prev) => ({ ...prev, layouts: updater(prev.layouts) }))
+  }, [])
+
   const setSettings = useCallback((patch: Partial<Settings>) => {
     setState((prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }))
   }, [])
@@ -421,6 +429,7 @@ export function useFields() {
     sortField,
     setSettings,
     replaceFields,
+    setLayouts,
     refreshPortal,
     restoreField,
   }

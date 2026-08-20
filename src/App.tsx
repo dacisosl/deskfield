@@ -10,7 +10,15 @@ import { Toolbar } from './components/Toolbar'
 import { useGlassBackdrop } from './hooks/useGlassBackdrop'
 import { usePassthrough } from './hooks/usePassthrough'
 import { api } from './lib/api'
-import { clamp } from './lib/layout'
+import {
+  applySnapshot,
+  fitSizes,
+  layoutIsFine,
+  packFields,
+  rememberLayout,
+  sameLayout,
+  screenKey,
+} from './lib/arrange'
 import type { Field, FieldItem, Settings } from './lib/types'
 import { useFields } from './state/useFields'
 
@@ -33,6 +41,7 @@ export default function App() {
     replaceFields,
     refreshPortal,
     restoreField,
+    setLayouts,
   } = useFields()
 
   const [bounds, setBounds] = useState({ w: window.innerWidth, h: window.innerHeight })
@@ -54,6 +63,8 @@ export default function App() {
   const [restartIn, setRestartIn] = useState<number | null>(null)
   const [dimmed, setDimmed] = useState(false)
   const dimTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 마지막으로 배치를 맞춘 화면 크기 — 같은 화면이면 손대지 않는다. */
+  const screenRef = useRef<string | null>(null)
 
   const modalOpen = scanning || showSettings || !!pickerFor || !!renameFor
   const capture = gesture || modalOpen || !!menu
@@ -220,23 +231,43 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [restartIn])
 
-  // 해상도가 바뀌면 화면 밖으로 나간 필드를 안으로 끌어온다.
+  /**
+   * 보조 모니터를 꽂거나 뽑으면 바탕화면 크기가 통째로 바뀐다.
+   * 예전에는 필드를 각자 화면 안으로 밀어 넣기만 해서 여러 개가 한자리에 겹쳤다.
+   * 이제는 그 화면에서 쓰던 배치를 되살리고, 없으면 겹치지 않게 다시 채워 넣는다.
+   */
   useEffect(() => {
     if (!loaded) return
-    replaceFields((fields) =>
-      fields.map((field) => {
-        const w = Math.min(field.w, bounds.w)
-        const h = Math.min(field.h, bounds.h)
-        return {
-          ...field,
-          w,
-          h,
-          x: clamp(field.x, 0, Math.max(0, bounds.w - w)),
-          y: clamp(field.y, 0, Math.max(0, bounds.h - h)),
-        }
-      }),
-    )
-  }, [bounds.w, bounds.h, loaded, replaceFields])
+    const key = screenKey(bounds)
+    const previous = screenRef.current
+    if (previous === key) return
+    screenRef.current = key
+
+    const before = stateRef.current.fields
+    if (before.length === 0) return
+
+    // 쓰던 자리를 화면 크기와 함께 남겨둔다 — 다시 그 화면이 되면 되돌아간다.
+    if (previous) setLayouts((layouts) => rememberLayout(layouts, previous, before))
+
+    const gap = stateRef.current.settings.fieldGap
+    const snapshot = stateRef.current.layouts.find((entry) => entry.key === key)
+    const fitted = fitSizes(before, bounds)
+    const next = snapshot
+      ? applySnapshot(fitted, snapshot, bounds, gap)
+      : layoutIsFine(fitted, bounds)
+        ? fitted
+        : packFields(fitted, bounds, gap)
+
+    if (sameLayout(before, next)) return
+    replaceFields(() => next)
+    // 앱을 켜는 순간의 정리까지 알릴 필요는 없다. 화면이 바뀐 경우에만 알린다.
+    if (previous) {
+      setToast({
+        text: snapshot ? '이 화면에서 쓰던 배치로 되돌렸어요' : '화면이 바뀌어서 필드를 다시 배치했어요',
+        action: { label: '되돌리기', run: () => replaceFields(() => before) },
+      })
+    }
+  }, [bounds, loaded, replaceFields, setLayouts, stateRef])
 
   const openItem = useCallback(async (item: FieldItem) => {
     const error = await api.open(item.path)
@@ -375,26 +406,10 @@ export default function App() {
   )
 
   const tidy = useCallback(() => {
-    const gapX = stateRef.current.settings.fieldGap
-    const gapY = stateRef.current.settings.fieldGap
-    let x = gapX
-    let y = gapY
-    let rowH = 0
-    replaceFields((fields) =>
-      fields.map((field) => {
-        if (x + field.w > bounds.w - gapX && x > gapX) {
-          x = gapX
-          y += rowH + gapY
-          rowH = 0
-        }
-        const placed = { ...field, x, y: Math.min(y, Math.max(0, bounds.h - field.h)) }
-        x += field.w + gapX
-        rowH = Math.max(rowH, field.collapsed ? 40 : field.h)
-        return placed
-      }),
-    )
+    const gap = stateRef.current.settings.fieldGap
+    replaceFields((fields) => packFields(fitSizes(fields, bounds), bounds, gap))
     setShowSettings(false)
-  }, [bounds.h, bounds.w, replaceFields, stateRef])
+  }, [bounds, replaceFields, stateRef])
 
   const fieldMenu = useCallback((field: Field, x: number, y: number) => {
     if (field.portal) {
