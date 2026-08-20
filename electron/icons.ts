@@ -40,6 +40,14 @@ function ensureCacheDir() {
   if (!cacheDir) {
     cacheDir = path.join(app.getPath('userData'), 'iconcache')
     mkdirSync(cacheDir, { recursive: true })
+    // 지난번에 갑자기 꺼졌다면 작업 목록이 남아 있다.
+    fs.readdir(cacheDir)
+      .then((names) =>
+        names
+          .filter((name) => name.startsWith('job-'))
+          .forEach((name) => void fs.unlink(path.join(cacheDir, name)).catch(() => {})),
+      )
+      .catch(() => {})
   }
   return cacheDir
 }
@@ -284,7 +292,7 @@ function runExtractor(jobs: { path: string; out: string }[]) {
         '-Size',
         String(SIZE),
       ],
-      { windowsHide: true, timeout: 25_000 },
+      { windowsHide: true, timeout: 20_000 },
       () => done(),
     )
     child.on('error', () => done())
@@ -298,6 +306,8 @@ type Pending = { target: string; file: string; resolve: (value: string | null) =
 let queue: Pending[] = []
 let timer: NodeJS.Timeout | null = null
 let flushing = false
+/** PowerShell이 막힌 컴퓨터도 있다. 한 번 통째로 실패하면 이번 실행에서는 더 시도하지 않는다. */
+let shellBroken = false
 
 function schedule() {
   if (timer || flushing) return
@@ -316,10 +326,12 @@ async function flush() {
   const jobs = new Map<string, string>()
   for (const item of batch) jobs.set(item.target, item.file)
 
-  try {
-    await runExtractor([...jobs].map(([target, out]) => ({ path: target, out })))
-  } catch {
-    // 아래에서 대안 경로로 처리한다.
+  if (!shellBroken) {
+    try {
+      await runExtractor([...jobs].map(([target, out]) => ({ path: target, out })))
+    } catch {
+      // 아래에서 대안 경로로 처리한다.
+    }
   }
 
   let missed = 0
@@ -334,7 +346,14 @@ async function flush() {
       item.resolve(url)
     }),
   )
-  if (missed > 0) logger(`아이콘 ${missed}/${batch.length}개는 셸에서 못 뽑아 기본 추출로 대체`)
+  if (missed > 0 && !shellBroken) {
+    logger(`아이콘 ${missed}/${batch.length}개는 셸에서 못 뽑아 기본 추출로 대체`)
+    // 통째로 실패했다면 추출 자체가 막힌 환경이다 — 매번 기다릴 이유가 없다.
+    if (missed === batch.length && jobs.size >= 2) {
+      shellBroken = true
+      logger('셸 아이콘 추출을 이번 실행에서는 건너뛴다')
+    }
+  }
 
   flushing = false
   if (queue.length > 0) schedule()
