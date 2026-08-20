@@ -15,7 +15,7 @@ function isReal(item: Pick<FieldItem, 'path'>) {
   return !item.path.startsWith('shell:')
 }
 
-const EMPTY: AppState = { version: 2, fields: [], settings: DEFAULT_SETTINGS }
+const EMPTY: AppState = { version: 3, fields: [], settings: DEFAULT_SETTINGS }
 
 function basename(target: string) {
   const parts = target.split(/[\\/]/).filter(Boolean)
@@ -50,8 +50,19 @@ function migrate(raw: unknown): AppState {
   if ((state.version ?? 1) < 2) {
     fields = fields.map((field) => ({ ...field, autoGrow: false }))
   }
+  // v3: 휴지통에 임시로 씌워두었던 이모지를 걷어낸다 — 이제 실제 아이콘이 나온다.
+  if ((state.version ?? 1) < 3) {
+    fields = fields.map((field) => ({
+      ...field,
+      items: field.items.map((item) =>
+        item.path.startsWith('shell:') && item.emoji === '🗑️'
+          ? { ...item, emoji: undefined }
+          : item,
+      ),
+    }))
+  }
   return {
-    version: 2,
+    version: 3,
     fields,
     settings: { ...DEFAULT_SETTINGS, ...(state.settings ?? {}) },
   }

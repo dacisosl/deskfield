@@ -462,7 +462,7 @@ export default function App() {
         {
           label: '휴지통 타일 추가',
           onSelect: () =>
-            addSpecial(field.id, { path: 'shell:RecycleBin', name: '휴지통', kind: 'file', emoji: '🗑️' }),
+            addSpecial(field.id, { path: 'shell:RecycleBin', name: '휴지통', kind: 'file' }),
         },
         { label: '', separator: true },
         { label: '이름순 정렬', onSelect: () => sortField(field.id, 'name') },
@@ -514,6 +514,10 @@ export default function App() {
               // 포털 항목은 새로고침 때 다시 만들어져 이모지가 유지되지 않는다
               ...(inPortal ? [] : [{ label: '아이콘 바꾸기…', onSelect: () => setPickerFor(item) }]),
             ]),
+        {
+          label: item.mono ? '원래 색으로' : '흑백으로 보기',
+          onSelect: () => updateItem(item.id, { mono: item.mono ? undefined : true }),
+        },
         { label: '', separator: true },
         ...(inPortal ? [] : [{ label: '필드에서 빼기', onSelect: () => removeItems([item.id]) }]),
         ...(special
@@ -521,7 +525,7 @@ export default function App() {
           : [{ label: '휴지통으로 삭제', danger: true, onSelect: () => void trashItem(item) }]),
       ],
     })
-  }, [openItem, removeItems, stateRef, trashItem])
+  }, [openItem, removeItems, stateRef, trashItem, updateItem])
 
   const dropPaths = useCallback(
     (id: string, paths: string[], index: number) => {
@@ -662,7 +666,7 @@ export default function App() {
         <EmojiPicker
           showReset={!!pickerFor.emoji}
           onPick={(emoji, mono) => updateItem(pickerFor.id, { emoji, mono: mono || undefined })}
-          onReset={() => updateItem(pickerFor.id, { emoji: undefined })}
+          onReset={() => updateItem(pickerFor.id, { emoji: undefined, mono: undefined })}
           onClose={() => setPickerFor(null)}
         />
       )}

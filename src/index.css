@@ -282,8 +282,8 @@ body,
 .df-tile__icon img {
   width: auto;
   height: 100%;
-  max-height: 48px;
-  image-rendering: -webkit-optimize-contrast;
+  max-height: 72px;
+  /* 셸에서 뽑은 그림이 원래 크기보다 커서 줄여 그린다 — 부드럽게 두는 쪽이 선명하다. */
   pointer-events: none;
 }
 
@@ -301,6 +301,11 @@ body,
 .df-tile__emoji--mono,
 .df-picker__grid--mono button {
   filter: grayscale(1) brightness(0.35) contrast(1.6);
+}
+
+/* 실제 아이콘은 실루엣까지 가면 뭉개진다 — 색만 뺀다. */
+.df-tile__img--mono {
+  filter: grayscale(1) contrast(1.05);
 }
 
 .df-tile__name {

@@ -44,6 +44,7 @@ const api = {
       mtime: number
     } | null>,
   getIcon: (target: string) => ipcRenderer.invoke('icon:get', target) as Promise<string | null>,
+  refreshIcons: () => ipcRenderer.invoke('icon:refresh') as Promise<boolean>,
 
   open: (target: string) => ipcRenderer.invoke('shell:open', target) as Promise<string | null>,
   setHidden: (target: string, hidden: boolean) =>

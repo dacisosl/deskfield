@@ -26,20 +26,6 @@ function useIcon(target: string) {
   return icon
 }
 
-/**
- * 폴더는 OS 추출이 환경에 따라 엉뚱한 아이콘을 주는 경우가 있어 직접 그린다.
- * 어디서나 같은 모습이고, 파스텔 배경과도 어울린다.
- */
-function FolderGlyph() {
-  return (
-    <svg viewBox="0 0 48 40" width="44" height="37" aria-hidden>
-      <path d="M4 9a4 4 0 0 1 4-4h11.2l4.2 5H40a4 4 0 0 1 4 4v2H4Z" fill="#EBBE5E" />
-      <rect x="4" y="13" width="40" height="23" rx="4" fill="#F7D98C" />
-      <rect x="4" y="13" width="40" height="7.5" rx="3.75" fill="#FBE7AE" />
-    </svg>
-  )
-}
-
 interface Props {
   item: FieldItem
   ink: string
@@ -65,9 +51,8 @@ export const ItemTile = memo(function ItemTile({
   const [hot, setHot] = useState(false)
   const special = item.path.startsWith('shell:')
   const canReceive = item.kind === 'folder' && !item.missing && !special
-  // 이모지를 골랐거나 폴더·특수 타일이면 OS 아이콘을 아예 요청하지 않는다.
-  const wantsOsIcon = !item.emoji && !special && item.kind !== 'folder'
-  const icon = useIcon(wantsOsIcon ? item.path : '')
+  // 이모지를 직접 고른 타일만 빼고, 나머지는 바탕화면에 보이는 그 아이콘을 그대로 쓴다.
+  const icon = useIcon(item.emoji ? '' : item.path)
 
   return (
     <button
@@ -122,12 +107,17 @@ export const ItemTile = memo(function ItemTile({
           <span className={`df-tile__emoji ${item.mono ? 'df-tile__emoji--mono' : ''}`}>
             {item.emoji}
           </span>
-        ) : item.kind === 'folder' ? (
-          <FolderGlyph />
         ) : icon ? (
-          <img src={icon} alt="" draggable={false} />
+          <img
+            className={`df-tile__img ${item.mono ? 'df-tile__img--mono' : ''}`}
+            src={icon}
+            alt=""
+            draggable={false}
+          />
         ) : (
-          <span className="df-tile__fallback">{special ? '🗑️' : '📄'}</span>
+          <span className="df-tile__fallback">
+            {special ? '🗑️' : item.kind === 'folder' ? '📁' : '📄'}
+          </span>
         )}
       </span>
       {labels && <span className="df-tile__name">{item.name}</span>}

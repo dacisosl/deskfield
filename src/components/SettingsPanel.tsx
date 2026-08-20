@@ -239,6 +239,17 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
             <button type="button" className="df-btn df-btn--ghost" onClick={onTidy}>
               필드 반듯하게 배치
             </button>
+            <button
+              type="button"
+              className="df-btn df-btn--ghost"
+              onClick={async () => {
+                await api.refreshIcons()
+                location.reload()
+              }}
+              title="폴더에 그림을 새로 달았거나 프로그램을 다시 깐 뒤에 쓰세요"
+            >
+              아이콘 다시 읽기
+            </button>
             <button type="button" className="df-btn df-btn--ghost" onClick={() => void api.checkUpdate()}>
               지금 업데이트 확인
             </button>

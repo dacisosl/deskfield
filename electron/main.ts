@@ -26,6 +26,7 @@ import {
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { clearIconCache, getIcon, setIconLogger } from './icons'
 import { extractZip } from './unzip'
 
 // CommonJS로 번들된다. Windows에서 asar 안의 ESM 진입점을 읽지 못하는 문제가 있어
@@ -70,13 +71,11 @@ process.on('unhandledRejection', (reason) => log(`처리되지 않은 거부: ${
 
 log(`--- 시작 (electron ${process.versions.electron}, ${process.platform} ${process.arch}) ---`)
 log(`실행 파일: ${app.getPath('exe')}`)
+setIconLogger(log)
 
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
-
-/** 아이콘은 경로+수정시각 기준으로만 다시 뽑는다. 바탕화면 항목이 많으면 추출 비용이 커서. */
-const iconCache = new Map<string, string>()
 
 // 단일 인스턴스 — 두 번 실행하면 기존 창을 다시 띄우고 종료한다.
 if (!app.requestSingleInstanceLock()) {
@@ -465,27 +464,13 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle('icon:get', async (_e, target: string) => {
-    const cached = iconCache.get(target)
-    if (cached) return cached
-    try {
-      // 바로가기는 자기 자신이 아니라 가리키는 대상의 아이콘을 써야 자연스럽다.
-      let source = target
-      if (process.platform === 'win32' && target.toLowerCase().endsWith('.lnk')) {
-        try {
-          const link = shell.readShortcutLink(target)
-          if (link.target) source = link.target
-        } catch {
-          // 해석 못 하면 원본으로
-        }
-      }
-      const image = await app.getFileIcon(source, { size: 'large' })
-      const url = image.toDataURL()
-      iconCache.set(target, url)
-      return url
-    } catch {
-      return null
-    }
+  // 바로가기(.lnk)도 경로 그대로 넘긴다 — 셸이 알아서 대상 아이콘을 내주고,
+  // 바탕화면에 보이는 모습과 같아진다.
+  ipcMain.handle('icon:get', (_e, target: string) => getIcon(target))
+
+  ipcMain.handle('icon:refresh', async () => {
+    await clearIconCache()
+    return true
   })
 
   ipcMain.handle('shell:open', async (_e, target: string) => {
