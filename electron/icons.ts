@@ -12,7 +12,7 @@
 import { app } from 'electron'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, promises as fs, writeFileSync } from 'node:fs'
+import { mkdirSync, promises as fs, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 /** 타일에 그려지는 크기(최대 140px)의 두 배까지 감당하는 값. */
@@ -35,25 +35,49 @@ export function setIconLogger(fn: (message: string) => void) {
   logger = fn
 }
 
+/** 뽑는 방식이 바뀌면 올린다 — 예전 그림이 그대로 남지 않게. */
+const CACHE_VERSION = 'v2'
+
 let cacheDir = ''
 function ensureCacheDir() {
   if (!cacheDir) {
     cacheDir = path.join(app.getPath('userData'), 'iconcache')
     mkdirSync(cacheDir, { recursive: true })
-    // 지난번에 갑자기 꺼졌다면 작업 목록이 남아 있다.
-    fs.readdir(cacheDir)
-      .then((names) =>
-        names
-          .filter((name) => name.startsWith('job-'))
-          .forEach((name) => void fs.unlink(path.join(cacheDir, name)).catch(() => {})),
-      )
-      .catch(() => {})
+    sweepCacheDir(cacheDir)
   }
   return cacheDir
 }
 
+/**
+ * 갑자기 꺼졌을 때 남는 작업 목록을 치우고, 방식이 바뀌었으면 예전 그림도 버린다.
+ * 뽑기가 시작되기 전에 끝나야 해서 동기로 처리한다 (파일 수십 개 수준).
+ */
+function sweepCacheDir(dir: string) {
+  const marker = path.join(dir, 'version.txt')
+  let stale = true
+  try {
+    stale = readFileSync(marker, 'utf8').trim() !== CACHE_VERSION
+  } catch {
+    // 표시가 없으면 예전 것으로 본다.
+  }
+  try {
+    for (const name of readdirSync(dir)) {
+      if (name.startsWith('job-') || (stale && name.endsWith('.png'))) {
+        try {
+          unlinkSync(path.join(dir, name))
+        } catch {
+          // 지우지 못한 파일 하나 때문에 멈출 이유는 없다.
+        }
+      }
+    }
+    if (stale) writeFileSync(marker, CACHE_VERSION, 'utf8')
+  } catch {
+    // 캐시 폴더를 훑지 못해도 아이콘은 다시 뽑으면 그만이다.
+  }
+}
+
 function cacheFile(target: string) {
-  const key = createHash('sha1').update(`${SIZE}:${target.toLowerCase()}`).digest('hex')
+  const key = createHash('sha1').update(`${CACHE_VERSION}:${SIZE}:${target.toLowerCase()}`).digest('hex')
   return path.join(ensureCacheDir(), `${key}.png`)
 }
 
@@ -104,6 +128,27 @@ public static class DfIcon
         [PreserveSig] int Draw(IntPtr a);
         [PreserveSig] int Remove(int a);
         [PreserveSig] int GetIcon(int i, int flags, ref IntPtr picon);
+        // GetOverlayImage는 v-table의 맨 끝이라, 그 앞의 자리를 모두 채워야 한다.
+        [PreserveSig] int GetImageInfo();
+        [PreserveSig] int Copy();
+        [PreserveSig] int Merge();
+        [PreserveSig] int Clone();
+        [PreserveSig] int GetImageRect();
+        [PreserveSig] int GetIconSize();
+        [PreserveSig] int SetIconSize();
+        [PreserveSig] int GetImageCount();
+        [PreserveSig] int SetImageCount();
+        [PreserveSig] int SetBkColor();
+        [PreserveSig] int GetBkColor();
+        [PreserveSig] int BeginDrag();
+        [PreserveSig] int DragEnter();
+        [PreserveSig] int DragLeave();
+        [PreserveSig] int DragMove();
+        [PreserveSig] int SetDragCursorImage();
+        [PreserveSig] int DragShowNolock();
+        [PreserveSig] int GetDragImage();
+        [PreserveSig] int GetItemFlags();
+        [PreserveSig] int GetOverlayImage(int iOverlay, ref int piIndex);
     }
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -126,6 +171,9 @@ public static class DfIcon
 
     const uint SHGFI_SYSICONINDEX = 0x4000;
     const uint SHGFI_PIDL = 0x0008;
+    const uint SHGFI_OVERLAYINDEX = 0x0040;
+    const uint SHGFI_ICON = 0x0100;
+    const uint SHGFI_SMALLICON = 0x0001;
 
     static int IndexOf(string target)
     {
@@ -146,8 +194,23 @@ public static class DfIcon
         return info.iIcon;
     }
 
-    static IntPtr Handle(int index)
+    // 바로가기 화살표·공유 표시 같은 겹침 그림의 번호. iIcon의 위 8비트에 실려 온다.
+    // SHGFI_OVERLAYINDEX는 SHGFI_ICON과 같이 써야 채워지므로 따로 물어보고,
+    // 덤으로 딸려오는 작은 아이콘은 바로 버린다.
+    static int OverlayOf(string target)
     {
+        if (target.StartsWith("::")) return 0;
+        SHFILEINFO info = new SHFILEINFO();
+        uint cb = (uint)Marshal.SizeOf(typeof(SHFILEINFO));
+        uint flags = SHGFI_ICON | SHGFI_SMALLICON | SHGFI_OVERLAYINDEX;
+        if (SHGetFileInfo(target, 0, ref info, cb, flags) == IntPtr.Zero) return 0;
+        if (info.hIcon != IntPtr.Zero) DestroyIcon(info.hIcon);
+        return (info.iIcon >> 24) & 0xFF;
+    }
+
+    static IntPtr Handle(int index, int overlay, out IntPtr badge)
+    {
+        badge = IntPtr.Zero;
         Guid iid = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
         // SHIL_JUMBO(4) -> SHIL_EXTRALARGE(2) -> SHIL_LARGE(0)
         foreach (int list in new int[] { 4, 2, 0 })
@@ -155,8 +218,22 @@ public static class DfIcon
             IImageList il = null;
             try { if (SHGetImageList(list, ref iid, out il) != 0 || il == null) continue; }
             catch { continue; }
-            IntPtr h = IntPtr.Zero;
-            try { if (il.GetIcon(index, 1, ref h) == 0 && h != IntPtr.Zero) return h; }
+            try
+            {
+                IntPtr h = IntPtr.Zero;
+                if (il.GetIcon(index, 1, ref h) != 0 || h == IntPtr.Zero) continue;
+                if (overlay > 0)
+                {
+                    // 겹침 그림도 같은 목록에서 꺼내야 크기가 맞는다. 없으면 그냥 넘어간다.
+                    int slot = 0;
+                    if (il.GetOverlayImage(overlay, ref slot) == 0 && slot > 0)
+                    {
+                        IntPtr b = IntPtr.Zero;
+                        if (il.GetIcon(slot, 1, ref b) == 0) badge = b;
+                    }
+                }
+                return h;
+            }
             catch { }
             finally { Marshal.ReleaseComObject(il); }
         }
@@ -191,11 +268,33 @@ public static class DfIcon
         return Rectangle.FromLTRB(left, top, right + 1, bottom + 1);
     }
 
-    public static bool Save(string target, string outPath, int size)
+    // 겹침 그림은 칸이 아니라 '아이콘'의 왼쪽 아래에 붙는다 — 탐색기가 보여주는 자리 그대로.
+    static void DrawBadge(Graphics g, IntPtr badge, Rectangle onto, int size)
+    {
+        using (Icon ico = Icon.FromHandle(badge))
+        using (Bitmap raw = ico.ToBitmap())
+        {
+            Rectangle box = Content(raw);
+            if (box.IsEmpty) return;
+            int side = Math.Max(1, (int)Math.Round(size * 0.4));
+            double scale = Math.Min((double)side / box.Width, (double)side / box.Height);
+            int w = Math.Max(1, (int)Math.Round(box.Width * scale));
+            int hh = Math.Max(1, (int)Math.Round(box.Height * scale));
+            int x = Math.Max(0, Math.Min(onto.Left, size - w));
+            int y = Math.Max(0, Math.Min(onto.Bottom - hh, size - hh));
+            g.DrawImage(raw, new Rectangle(x, y, w, hh), box, GraphicsUnit.Pixel);
+        }
+    }
+
+    public static bool Save(string target, string outPath, int size, bool withOverlay)
     {
         int index = IndexOf(target);
         if (index < 0) return false;
-        IntPtr h = Handle(index);
+        // 겹침 그림은 바로가기 화살표만 구워 넣는다. 클라우드 동기화 표시 같은 건
+        // 상태가 바뀌는데 캐시에 박혀버리면 오히려 틀린 그림이 된다.
+        int overlay = withOverlay ? OverlayOf(target) : 0;
+        IntPtr badge;
+        IntPtr h = Handle(index, overlay, out badge);
         if (h == IntPtr.Zero) return false;
         try
         {
@@ -231,8 +330,10 @@ public static class DfIcon
                         double scale = Math.Min((double)size / src.Width, (double)size / src.Height);
                         int w = Math.Max(1, (int)Math.Round(src.Width * scale));
                         int hh = Math.Max(1, (int)Math.Round(src.Height * scale));
-                        g.DrawImage(raw, new Rectangle((size - w) / 2, (size - hh) / 2, w, hh),
-                            src, GraphicsUnit.Pixel);
+                        Rectangle onto = new Rectangle((size - w) / 2, (size - hh) / 2, w, hh);
+                        g.DrawImage(raw, onto, src, GraphicsUnit.Pixel);
+
+                        if (badge != IntPtr.Zero) DrawBadge(g, badge, onto, size);
                     }
                     dst.Save(outPath, ImageFormat.Png);
                 }
@@ -240,7 +341,11 @@ public static class DfIcon
             return true;
         }
         catch { return false; }
-        finally { DestroyIcon(h); }
+        finally
+        {
+            DestroyIcon(h);
+            if (badge != IntPtr.Zero) DestroyIcon(badge);
+        }
     }
 }
 '@
@@ -249,7 +354,7 @@ Add-Type -TypeDefinition $code -ReferencedAssemblies System.Drawing | Out-Null
 
 $items = Get-Content -LiteralPath $List -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($item in $items) {
-  try { [void][DfIcon]::Save($item.path, $item.out, $Size) } catch { }
+  try { [void][DfIcon]::Save($item.path, $item.out, $Size, [bool]$item.overlay) } catch { }
 }
 `
 
@@ -262,8 +367,11 @@ function ensureScript() {
   return scriptPath
 }
 
+/** 바로가기는 바탕화면에서처럼 화살표를 얹어준다. */
+const SHORTCUT = /\.(lnk|url)$/i
+
 /** 셸에서 실제로 아이콘을 뽑는다. 실패는 조용히 넘긴다 — 호출부가 대안을 갖고 있다. */
-function runExtractor(jobs: { path: string; out: string }[]) {
+function runExtractor(jobs: { path: string; out: string; overlay: boolean }[]) {
   return new Promise<void>((resolve) => {
     let listFile = ''
     try {
@@ -328,7 +436,9 @@ async function flush() {
 
   if (!shellBroken) {
     try {
-      await runExtractor([...jobs].map(([target, out]) => ({ path: target, out })))
+      await runExtractor(
+        [...jobs].map(([target, out]) => ({ path: target, out, overlay: SHORTCUT.test(target) })),
+      )
     } catch {
       // 아래에서 대안 경로로 처리한다.
     }
