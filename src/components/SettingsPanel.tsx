@@ -1,13 +1,57 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { api } from '../lib/api'
+import { THEMES } from '../lib/palette'
 import { ConfirmDialog } from './ConfirmDialog'
-import type { Settings } from '../lib/types'
+import type { Settings, Theme } from '../lib/types'
 
 interface Props {
   settings: Settings
   onChange: (patch: Partial<Settings>) => void
   onClose: () => void
   onTidy: () => void
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="df-sec">
+      <h3 className="df-sec__title">{title}</h3>
+      {children}
+    </section>
+  )
+}
+
+function Slider(props: {
+  label: string
+  min: number
+  max: number
+  step: number
+  value: number
+  shown: string
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="df-row">
+      <span>{props.label}</span>
+      <input
+        type="range"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={props.value}
+        onChange={(e) => props.onChange(Number(e.target.value))}
+      />
+      <b>{props.shown}</b>
+    </label>
+  )
+}
+
+function Check(props: { checked: boolean; onChange: (checked: boolean) => void; children: ReactNode }) {
+  return (
+    <label className="df-row df-row--check">
+      <input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} />
+      <span>{props.children}</span>
+    </label>
+  )
 }
 
 export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
@@ -28,252 +72,207 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
         </header>
 
         <div className="df-settings">
-          <div className="df-row">
-            <span>필드 모양</span>
-            <div className="df-seg">
-              <button
-                type="button"
-                className={settings.theme === 'pastel' ? 'df-seg__on' : ''}
-                onClick={() => onChange({ theme: 'pastel' })}
-              >
-                파스텔
-              </button>
-              <button
-                type="button"
-                className={settings.theme === 'glass' ? 'df-seg__on' : ''}
-                onClick={() => onChange({ theme: 'glass' })}
-              >
-                유리
-              </button>
+          <Section title="모양">
+            <div className="df-row">
+              <span>필드 디자인</span>
+              <div className="df-themes">
+                {(Object.keys(THEMES) as Theme[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`df-theme df-theme--${key} ${settings.theme === key ? 'df-theme--on' : ''}`}
+                    onClick={() => onChange({ theme: key })}
+                  >
+                    <i style={{ background: THEMES[key].base, color: THEMES[key].ink }}>Aa</i>
+                    {THEMES[key].label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          {settings.theme === 'glass' && (
-            <div className="df-row df-row--btns">
-              <button
-                type="button"
-                className="df-btn df-btn--ghost"
-                onClick={async () => {
-                  const picked = await api.pickImage()
-                  if (picked) onChange({ glassImage: picked })
-                }}
-              >
-                유리 배경 그림 고르기
-              </button>
-              {settings.glassImage && (
+            <Check checked={settings.glass} onChange={(glass) => onChange({ glass })}>
+              유리 효과
+              <small className="df-sub">바탕화면 그림을 흐리게 비춰 필드 뒤가 은은하게 보입니다.</small>
+            </Check>
+
+            {settings.glass && (
+              <div className="df-row df-row--btns df-row--indent">
                 <button
                   type="button"
-                  className="df-btn df-btn--ghost"
-                  onClick={() => onChange({ glassImage: undefined })}
+                  className="df-btn df-btn--ghost df-btn--sm"
+                  onClick={async () => {
+                    const picked = await api.pickImage()
+                    if (picked) onChange({ glassImage: picked })
+                  }}
                 >
-                  바탕화면으로 되돌리기
+                  비출 그림 직접 고르기
                 </button>
-              )}
-            </div>
-          )}
+                {settings.glassImage && (
+                  <button
+                    type="button"
+                    className="df-btn df-btn--ghost df-btn--sm"
+                    onClick={() => onChange({ glassImage: undefined })}
+                  >
+                    바탕화면으로 되돌리기
+                  </button>
+                )}
+              </div>
+            )}
 
-          <label className="df-row">
-            <span>배경 진하기</span>
-            <input
-              type="range"
+            <Slider
+              label="배경 진하기"
               min={0.2}
-              max={0.9}
+              max={0.95}
               step={0.05}
               value={settings.opacity}
-              onChange={(e) => onChange({ opacity: Number(e.target.value) })}
+              shown={`${Math.round(settings.opacity * 100)}%`}
+              onChange={(opacity) => onChange({ opacity })}
             />
-            <b>{Math.round(settings.opacity * 100)}%</b>
-          </label>
-
-          <label className="df-row">
-            <span>아이콘 크기</span>
-            <input
-              type="range"
+            <Slider
+              label="아이콘 크기"
               min={68}
               max={140}
               step={4}
               value={settings.tile}
-              onChange={(e) => onChange({ tile: Number(e.target.value) })}
+              shown={`${settings.tile}px`}
+              onChange={(tile) => onChange({ tile })}
             />
-            <b>{settings.tile}px</b>
-          </label>
-
-          <label className="df-row">
-            <span>아이콘 간격</span>
-            <input
-              type="range"
+            <Slider
+              label="아이콘 간격"
               min={2}
               max={24}
               step={2}
               value={settings.iconGap}
-              onChange={(e) => onChange({ iconGap: Number(e.target.value) })}
+              shown={`${settings.iconGap}px`}
+              onChange={(iconGap) => onChange({ iconGap })}
             />
-            <b>{settings.iconGap}px</b>
-          </label>
-
-          <label className="df-row">
-            <span>필드 간격</span>
-            <input
-              type="range"
+            <Slider
+              label="필드 간격"
               min={8}
               max={48}
               step={4}
               value={settings.fieldGap}
-              onChange={(e) => onChange({ fieldGap: Number(e.target.value) })}
+              shown={`${settings.fieldGap}px`}
+              onChange={(fieldGap) => onChange({ fieldGap })}
             />
-            <b>{settings.fieldGap}px</b>
-          </label>
+            <Check checked={settings.labels} onChange={(labels) => onChange({ labels })}>
+              항목 이름 보이기
+            </Check>
+          </Section>
 
-          <label className="df-row df-row--check">
-            <input
-              type="checkbox"
-              checked={settings.hideOriginals}
-              onChange={(e) => onChange({ hideOriginals: e.target.checked })}
-            />
-            <span>
+          <Section title="바탕화면 원본">
+            <Check checked={settings.hideOriginals} onChange={(hideOriginals) => onChange({ hideOriginals })}>
               필드에 담으면 바탕화면 원본 숨기기
-              <small className="df-sub">앱이 켜져 있는 동안만 숨깁니다. 앱을 끄면 전부 다시 보이고, 켜면 다시 정리됩니다.</small>
-            </span>
-          </label>
-
-          <label className="df-row df-row--check">
-            <input
-              type="checkbox"
-              checked={settings.dimIdle}
-              onChange={(e) => onChange({ dimIdle: e.target.checked })}
-            />
-            <span>
-              다른 창을 쓸 때 흐리게
+              <small className="df-sub">앱이 켜져 있는 동안만 숨깁니다. 앱을 끄면 전부 다시 보입니다.</small>
+            </Check>
+            <Check checked={settings.searchLinks} onChange={(searchLinks) => onChange({ searchLinks })}>
+              숨긴 항목도 검색되게 <b className="df-tag">권장</b>
               <small className="df-sub">
-                다른 프로그램 창이 앞에 오면 필드가 옅어지고, 바탕화면으로 돌아오면
-                선명해집니다.
+                숨긴 파일은 윈도우 검색·파일 열기 창에 안 나옵니다. 대신 사용자 폴더의{' '}
+                <b>바탕 필드</b> 폴더에 필드별 바로가기를 만들어 시작 메뉴 검색과 파일 열기 창(빠른
+                액세스)에서 찾을 수 있게 합니다.
               </small>
-            </span>
-          </label>
+            </Check>
+            {settings.searchLinks && (
+              <div className="df-row df-row--btns df-row--indent">
+                <button
+                  type="button"
+                  className="df-btn df-btn--ghost df-btn--sm"
+                  onClick={() => void api.openSearchFolder()}
+                >
+                  바로가기 폴더 열기
+                </button>
+              </div>
+            )}
+          </Section>
 
-          {settings.dimIdle && (
-            <label className="df-row">
-              <span>남길 정도</span>
-              <input
-                type="range"
+          <Section title="동작">
+            <Check checked={settings.dimIdle} onChange={(dimIdle) => onChange({ dimIdle })}>
+              다른 창을 쓸 때 흐리게
+              <small className="df-sub">다른 프로그램이 앞에 오면 옅어지고, 바탕화면으로 돌아오면 선명해집니다.</small>
+            </Check>
+            {settings.dimIdle && (
+              <Slider
+                label="남길 정도"
                 min={0}
                 max={0.9}
                 step={0.05}
                 value={settings.dimLevel}
-                onChange={(e) => onChange({ dimLevel: Number(e.target.value) })}
+                shown={settings.dimLevel === 0 ? '숨김' : `${Math.round(settings.dimLevel * 100)}%`}
+                onChange={(dimLevel) => onChange({ dimLevel })}
               />
-              <b>{settings.dimLevel === 0 ? '숨김' : `${Math.round(settings.dimLevel * 100)}%`}</b>
-            </label>
-          )}
-
-          <label className="df-row df-row--check">
-            <input
-              type="checkbox"
-              checked={settings.showBar}
-              onChange={(e) => onChange({ showBar: e.target.checked })}
-            />
-            <span>
+            )}
+            <Check checked={settings.snap} onChange={(snap) => onChange({ snap })}>
+              8px 격자에 맞춰 정렬
+            </Check>
+            <Check checked={settings.locked} onChange={(locked) => onChange({ locked })}>
+              필드 잠그기 (이동·크기조절 막기)
+            </Check>
+            <Check checked={settings.showBar} onChange={(showBar) => onChange({ showBar })}>
               오른쪽 아래 도구 막대 표시
               <small className="df-sub">꺼도 트레이 아이콘 우클릭으로 모든 기능을 쓸 수 있습니다.</small>
-            </span>
-          </label>
+            </Check>
+          </Section>
 
-          <label className="df-row df-row--check">
-            <input
-              type="checkbox"
-              checked={settings.labels}
-              onChange={(e) => onChange({ labels: e.target.checked })}
-            />
-            <span>항목 이름 보이기</span>
-          </label>
-
-          <label className="df-row df-row--check">
-            <input
-              type="checkbox"
-              checked={settings.snap}
-              onChange={(e) => onChange({ snap: e.target.checked })}
-            />
-            <span>8px 격자에 맞춰 정렬</span>
-          </label>
-
-          <label className="df-row df-row--check">
-            <input
-              type="checkbox"
-              checked={settings.locked}
-              onChange={(e) => onChange({ locked: e.target.checked })}
-            />
-            <span>필드 잠그기 (이동·크기조절 막기)</span>
-          </label>
-
-          <label className="df-row df-row--check">
-            <input
-              type="checkbox"
+          <Section title="시작">
+            <Check
               checked={autostart}
-              onChange={async (e) => {
+              onChange={async (checked) => {
                 // 끄는 건 확인을 받는다 — 앱이 안 켜지면 필드가 아예 보이지 않는다.
-                if (!e.target.checked) {
+                if (!checked) {
                   setConfirmOff(true)
                   return
                 }
                 setAutostart(await api.setAutostart(true))
               }}
-            />
-            <span>
-              윈도우 시작할 때 자동 실행 <b className="df-tag">권장</b>
-              <small className="df-sub">
-                필드는 이 앱이 켜져 있을 때만 보입니다. 꺼두면 컴퓨터를 켤 때마다 직접
-                실행해야 합니다.
-              </small>
-            </span>
-          </label>
-
-          {!autostart && (
-            <p className="df-warn">
-              ⚠ 자동 실행이 꺼져 있습니다. 컴퓨터를 켠 뒤 <b>바탕 필드를 직접 실행</b>해야
-              필드가 나타납니다. 실행 전까지는 바탕화면이 원래 상태(모든 아이콘이 보이는
-              상태)로 표시됩니다.
-            </p>
-          )}
-
-          <div className="df-row df-row--btns">
-            <button type="button" className="df-btn df-btn--ghost" onClick={onTidy}>
-              필드 반듯하게 배치
-            </button>
-            <button
-              type="button"
-              className="df-btn df-btn--ghost"
-              onClick={async () => {
-                await api.refreshIcons()
-                location.reload()
-              }}
-              title="폴더에 그림을 새로 달았거나 프로그램을 다시 깐 뒤에 쓰세요"
             >
-              아이콘 다시 읽기
-            </button>
-            <button type="button" className="df-btn df-btn--ghost" onClick={() => void api.checkUpdate()}>
-              지금 업데이트 확인
-            </button>
-            <button type="button" className="df-btn df-btn--ghost" onClick={() => api.quit()}>
-              앱 종료
-            </button>
-            {version && <span className="df-version">v{version}</span>}
-          </div>
+              윈도우 시작할 때 가장 먼저 실행 <b className="df-tag">권장</b>
+              <small className="df-sub">
+                로그인하자마자 다른 시작 프로그램보다 먼저 떠서, 숨길 아이콘이 잠깐 보이는 시간을
+                줄입니다.
+              </small>
+            </Check>
+            {!autostart && (
+              <p className="df-warn">
+                ⚠ 자동 실행이 꺼져 있습니다. 컴퓨터를 켠 뒤 <b>바탕 필드를 직접 실행</b>해야 필드가
+                나타납니다.
+              </p>
+            )}
+          </Section>
 
-          <p className="df-hint">
-            압축 파일(zip) 안에서 바로 실행하면 업데이트가 설치되지 않습니다 — 반드시{' '}
-            <b>압축을 풀어서</b> 쓰세요.
-            <br />
-            새 버전은 <b>알아서 받아서 설치</b>합니다 — 준비되면 알려주고 잠시 뒤 스스로 다시
-            시작합니다. 위 버튼은 기다리지 않고 바로 확인할 때만 쓰세요.
-            <br />
-            단축키 — <b>Ctrl+Alt+D</b> 편집 모드, <b>Ctrl+Alt+H</b> 필드 숨기기/보이기.
-            <br />
-            필드 밖 빈 자리는 그대로 바탕화면입니다. 원래 쓰던 아이콘과 우클릭 메뉴를 그대로 쓸 수
-            있어요.
-          </p>
+          <Section title="관리">
+            <div className="df-row df-row--btns">
+              <button type="button" className="df-btn df-btn--ghost df-btn--sm" onClick={onTidy}>
+                필드 반듯하게 배치
+              </button>
+              <button
+                type="button"
+                className="df-btn df-btn--ghost df-btn--sm"
+                onClick={async () => {
+                  await api.refreshIcons()
+                  location.reload()
+                }}
+                title="폴더에 그림을 새로 달았거나 프로그램을 다시 깐 뒤에 쓰세요"
+              >
+                아이콘 다시 읽기
+              </button>
+              <button type="button" className="df-btn df-btn--ghost df-btn--sm" onClick={() => void api.checkUpdate()}>
+                업데이트 확인
+              </button>
+              <button type="button" className="df-btn df-btn--ghost df-btn--sm" onClick={() => api.quit()}>
+                앱 종료
+              </button>
+            </div>
+            <p className="df-hint">
+              단축키 — <b>Ctrl+Alt+D</b> 편집 모드, <b>Ctrl+Alt+H</b> 필드 숨기기/보이기.
+              <br />
+              새 버전은 알아서 받아 설치합니다. zip으로 받았다면 반드시 <b>압축을 풀어서</b> 쓰세요.
+            </p>
+          </Section>
         </div>
 
         <footer className="df-modal__foot">
+          {version && <span className="df-version">v{version}</span>}
           <button type="button" className="df-btn df-btn--go" onClick={onClose}>
             닫기
           </button>

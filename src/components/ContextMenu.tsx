@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { PALETTE } from '../lib/palette'
 
 export interface MenuEntry {
   label: string
@@ -12,8 +11,6 @@ export interface MenuSpec {
   x: number
   y: number
   entries: MenuEntry[]
-  /** 색 고르기 줄을 맨 위에 붙인다. */
-  onColor?: (key: string) => void
 }
 
 interface Props {
@@ -54,24 +51,6 @@ export function ContextMenu({ menu, onClose }: Props) {
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
-      {menu.onColor && (
-        <div className="df-menu__colors">
-          {PALETTE.map((tone) => (
-            <button
-              key={tone.key}
-              type="button"
-              title={tone.label}
-              className="df-menu__swatch"
-              style={{ background: tone.base }}
-              onClick={() => {
-                menu.onColor?.(tone.key)
-                onClose()
-              }}
-            />
-          ))}
-        </div>
-      )}
-
       {menu.entries.map((entry, index) =>
         entry.separator ? (
           <hr key={`sep-${index}`} className="df-menu__sep" />

@@ -1,28 +1,20 @@
-export interface Pastel {
-  key: string
-  label: string
+import type { Theme } from './types'
+
+export interface Tone {
   /** 필드 배경 */
   base: string
-  /** 제목·아이콘 글자색 — 파스텔 위에서 대비가 확보되는 짙은 톤 */
+  /** 제목·아이콘 글자색 */
   ink: string
 }
 
-export const PALETTE: Pastel[] = [
-  { key: 'white', label: '화이트', base: '#FFFFFF', ink: '#4A4A55' },
-  { key: 'lavender', label: '라벤더', base: '#DCD6F2', ink: '#453C63' },
-  { key: 'mint', label: '민트', base: '#CFE9DE', ink: '#2F5449' },
-  { key: 'sky', label: '스카이', base: '#D4E4F4', ink: '#2E4A63' },
-  { key: 'peach', label: '피치', base: '#F6DCCB', ink: '#6A4632' },
-  { key: 'lemon', label: '레몬', base: '#F3E9C4', ink: '#5F5326' },
-  { key: 'rose', label: '로즈', base: '#F3D7E0', ink: '#653847' },
-  { key: 'sage', label: '세이지', base: '#DEE7D3', ink: '#43522F' },
-  { key: 'clay', label: '클레이', base: '#E7DED6', ink: '#544639' },
-]
+/** 필드 디자인은 두 가지뿐이다 — 모든 필드가 같은 톤을 써서 바탕화면이 정돈돼 보이게. */
+export const THEMES: Record<Theme, Tone & { label: string }> = {
+  dark: { label: '어둡게', base: '#161824', ink: '#EEF0F6' },
+  light: { label: '밝게', base: '#F7F7FA', ink: '#2A2C37' },
+}
 
-const byKey = new Map(PALETTE.map((p) => [p.key, p]))
-
-export function pastel(key: string): Pastel {
-  return byKey.get(key) ?? PALETTE[0]
+export function tone(theme: Theme): Tone {
+  return THEMES[theme] ?? THEMES.dark
 }
 
 export function rgba(hex: string, alpha: number) {
@@ -31,14 +23,4 @@ export function rgba(hex: string, alpha: number) {
   const g = parseInt(value.slice(2, 4), 16)
   const b = parseInt(value.slice(4, 6), 16)
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
-/** 필드를 새로 만들 때 이미 쓰인 색은 피해서 고른다. */
-export function nextColor(used: string[]) {
-  const counts = PALETTE.map((p) => ({
-    key: p.key,
-    count: used.filter((u) => u === p.key).length,
-  }))
-  counts.sort((a, b) => a.count - b.count)
-  return counts[0].key
 }

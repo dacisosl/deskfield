@@ -29,12 +29,14 @@ export interface Field {
   items: FieldItem[]
 }
 
-export type Theme = 'pastel' | 'glass'
+export type Theme = 'dark' | 'light'
 
 export interface Settings {
-  /** 필드 외형 — 파스텔 단색 / 바탕화면을 흐리게 비추는 유리 */
+  /** 필드 외형 — 모든 필드가 같은 어두운/밝은 디자인을 쓴다 */
   theme: Theme
-  /** 유리 모드 배경 이미지 직접 지정 (없으면 현재 바탕화면을 쓴다) */
+  /** 바탕화면을 흐리게 비춰 유리처럼 보이게 한다 */
+  glass: boolean
+  /** 유리 배경 이미지 직접 지정 (없으면 현재 바탕화면을 쓴다) */
   glassImage?: string
   /** 필드 배경 불투명도 0.2 ~ 0.9 */
   opacity: number
@@ -52,6 +54,8 @@ export interface Settings {
   labels: boolean
   /** 필드에 담은 항목의 바탕화면 원본을 숨겨 '이동'처럼 보이게 한다 */
   hideOriginals: boolean
+  /** 숨긴 항목도 찾을 수 있게 사용자 폴더에 필드별 바로가기를 만들어 둔다 */
+  searchLinks: boolean
   /** 마우스가 필드에서 벗어나 있으면 흐려진다 (다른 일 할 때 방해되지 않게) */
   dimIdle: boolean
   /** 흐려졌을 때의 진하기 0.15 ~ 1 */
@@ -83,8 +87,9 @@ export interface AppState {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  theme: 'pastel',
-  opacity: 0.55,
+  theme: 'dark',
+  glass: true,
+  opacity: 0.6,
   tile: 92,
   locked: false,
   snap: true,
@@ -92,6 +97,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fieldGap: 24,
   labels: true,
   hideOriginals: true,
+  searchLinks: true,
   showBar: true,
   dimIdle: true,
   dimLevel: 0.45,

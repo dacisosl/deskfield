@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ScanEntry } from '../lib/api'
 import { classify, type Suggestion } from '../lib/classify'
-import { PALETTE, pastel } from '../lib/palette'
 
 export interface ScanResult {
   title: string
@@ -91,12 +90,10 @@ export function ScanReview({ taken, onCancel, onApply }: Props) {
           )}
 
           {view.map((group) => {
-            const tone = pastel(group.color)
             return (
               <section
                 key={group.key}
                 className={`df-group ${group.enabled ? '' : 'df-group--off'}`}
-                style={{ background: `${tone.base}66`, borderColor: `${tone.base}` }}
               >
                 <header className="df-group__head">
                   <input
@@ -107,24 +104,11 @@ export function ScanReview({ taken, onCancel, onApply }: Props) {
                   <input
                     className="df-group__title"
                     value={group.title}
-                    style={{ color: tone.ink }}
                     onChange={(e) => patch(group.key, { title: e.target.value })}
                     onFocus={() => api.setFocusable(true)}
                     onBlur={() => api.setFocusable(false)}
                   />
                   <span className="df-group__count">{group.entries.length}개</span>
-                  <span className="df-group__colors">
-                    {PALETTE.map((color) => (
-                      <button
-                        key={color.key}
-                        type="button"
-                        title={color.label}
-                        className={`df-swatch ${color.key === group.color ? 'df-swatch--on' : ''}`}
-                        style={{ background: color.base }}
-                        onClick={() => patch(group.key, { color: color.key })}
-                      />
-                    ))}
-                  </span>
                 </header>
 
                 <ul className="df-group__chips">

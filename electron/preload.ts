@@ -87,6 +87,8 @@ const api = {
 
   getAutostart: () => ipcRenderer.invoke('autostart:get') as Promise<boolean>,
   setAutostart: (enabled: boolean) => ipcRenderer.invoke('autostart:set', enabled) as Promise<boolean>,
+  /** 숨긴 항목을 찾을 수 있게 만든 바로가기 폴더를 탐색기로 연다 */
+  openSearchFolder: () => ipcRenderer.invoke('links:open') as Promise<boolean>,
 
   getWorkArea: () => ipcRenderer.invoke('app:workarea') as Promise<Rect>,
 

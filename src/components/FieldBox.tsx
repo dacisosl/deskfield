@@ -9,7 +9,7 @@ import {
 } from 'react'
 import { api } from '../lib/api'
 import { PAD, clamp, columns, neededHeight, snapTo, tileHeight } from '../lib/layout'
-import { pastel, rgba } from '../lib/palette'
+import { rgba, tone as themeTone } from '../lib/palette'
 import { HEADER_H, MIN_H, MIN_W, type Field, type FieldItem, type Settings } from '../lib/types'
 import { ItemTile } from './ItemTile'
 
@@ -68,7 +68,7 @@ export const FieldBox = memo(function FieldBox({
   const titleRef = useRef<HTMLInputElement | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const [dropAt, setDropAt] = useState<number | null>(null)
-  const tone = pastel(field.color)
+  const tone = themeTone(settings.theme)
   const id = field.id
   const patch = useCallback((next: Partial<Field>) => onPatch(id, next), [onPatch, id])
 
@@ -175,14 +175,10 @@ export const FieldBox = memo(function FieldBox({
 
   const cols = columns(field.w, settings)
   const rowH = tileHeight(settings)
-  const isGlass = settings.theme === 'glass'
-
   return (
     <section
       data-solid
-      className={`df-field ${field.collapsed ? 'df-field--collapsed' : ''} ${
-        isGlass ? 'df-field--glass' : ''
-      }`}
+      className={`df-field df-field--${settings.theme} ${field.collapsed ? 'df-field--collapsed' : ''}`}
       style={
         {
           left: field.x,
@@ -191,24 +187,13 @@ export const FieldBox = memo(function FieldBox({
           height: field.collapsed ? HEADER_H : field.h,
           zIndex: raised ? 3 : 1,
           color: tone.ink,
-          ...(isGlass
-            ? {
-                // 유리는 색을 옅게만 얹는다 — 배경 그림이 주인공이다.
-                '--glass-img': glass ? `url(${glass})` : 'none',
-                '--glass-w': `${bounds.w}px`,
-                '--glass-h': `${bounds.h}px`,
-                '--fx': `${field.x}px`,
-                '--fy': `${field.y}px`,
-                '--glass-tint': rgba(tone.base, Math.min(0.5, settings.opacity * 0.55)),
-              }
-            : {
-                background: rgba(tone.base, settings.opacity),
-                // 흰 필드는 흰 테두리가 안 보여서 옅은 회색으로 윤곽만 잡아준다.
-                borderColor:
-                  field.color === 'white'
-                    ? 'rgba(178, 178, 194, 0.55)'
-                    : rgba('#FFFFFF', Math.min(0.75, settings.opacity + 0.2)),
-              }),
+          // 흐리게 구운 바탕화면을 필드 위치만큼 잘라 깔고 그 위에 테마 색을 얹는다.
+          '--glass-img': settings.glass && glass ? `url(${glass})` : 'none',
+          '--glass-w': `${bounds.w}px`,
+          '--glass-h': `${bounds.h}px`,
+          '--fx': `${field.x}px`,
+          '--fy': `${field.y}px`,
+          '--tint': rgba(tone.base, settings.glass && glass ? settings.opacity : Math.max(settings.opacity, 0.5)),
         } as React.CSSProperties
       }
       onContextMenu={(event) => {

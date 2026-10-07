@@ -66,9 +66,19 @@ function migrate(raw: unknown): AppState {
   return {
     version: 4,
     fields,
-    settings: { ...DEFAULT_SETTINGS, ...(state.settings ?? {}) },
+    settings: normalizeSettings(state.settings),
     layouts: Array.isArray(state.layouts) ? state.layouts.slice(0, MAX_LAYOUTS) : [],
   }
+}
+
+/** 예전 파스텔/유리 테마는 어두운 테마로 옮긴다 — 유리 효과는 예전 선택을 따른다. */
+function normalizeSettings(saved?: Partial<Omit<Settings, 'theme'>> & { theme?: string }): Settings {
+  const merged = { ...DEFAULT_SETTINGS, ...(saved ?? {}) } as Settings
+  if (merged.theme !== 'dark' && merged.theme !== 'light') {
+    merged.glass = saved?.theme !== 'pastel'
+    merged.theme = 'dark'
+  }
+  return merged
 }
 
 function normalizeField(field: Field): Field {

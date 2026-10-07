@@ -70,7 +70,7 @@ export default function App() {
   const capture = gesture || modalOpen || !!menu
 
   const glass = useGlassBackdrop(
-    state.settings.theme === 'glass',
+    state.settings.glass,
     bounds,
     state.settings.glassImage,
   )
@@ -416,7 +416,6 @@ export default function App() {
       setMenu({
         x,
         y,
-        onColor: (color) => patchField(field.id, { color }),
         entries: [
           { label: '폴더 열기', onSelect: () => void api.open(field.portal as string) },
           { label: '새로 고침', onSelect: () => void refreshPortal(field.id) },
@@ -447,7 +446,6 @@ export default function App() {
     setMenu({
       x,
       y,
-      onColor: (color) => patchField(field.id, { color }),
       entries: [
         {
           label: '폴더 비추기(포털)…',

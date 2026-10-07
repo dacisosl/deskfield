@@ -236,6 +236,134 @@ async function writeState(state: unknown) {
   await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf8')
   // 저장 도중 앱이 죽어도 기존 파일이 깨지지 않도록 교체 방식으로 쓴다.
   await fs.rename(tmp, STATE_FILE)
+  scheduleSearchLinks(state)
+}
+
+/* ------------------------------------------------------------------ 검색용 바로가기 */
+
+/**
+ * 숨김 속성이 걸린 파일은 윈도우 검색·탐색기·파일 열기 창에서 전부 빠진다.
+ * 그래서 사용자 폴더 아래 '바탕 필드' 폴더에 필드별로 바로가기(.lnk)를 만들어 둔다.
+ * 이 폴더는 숨기지 않으므로 시작 메뉴 검색이 이름으로 찾아주고, 파일 열기 창에서도
+ * 바로가기를 고르면 숨겨진 원본이 그대로 열린다. 원본은 건드리지 않는다.
+ */
+const LINK_ROOT = path.join(app.getPath('home'), '바탕 필드')
+const LINK_MARK = '.deskfield'
+
+let linkTimer: ReturnType<typeof setTimeout> | null = null
+let linkPending: unknown = null
+
+function scheduleSearchLinks(state: unknown) {
+  if (process.platform !== 'win32') return
+  linkPending = state
+  if (linkTimer) clearTimeout(linkTimer)
+  linkTimer = setTimeout(() => {
+    linkTimer = null
+    void syncSearchLinks(linkPending).catch((error) => log(`검색용 바로가기 갱신 실패: ${error}`))
+  }, 1500)
+}
+
+function safeName(name: string) {
+  const clean = name.replace(/[\\/:*?"<>|]/g, '_').replace(/[. ]+$/, '').trim()
+  return clean || '이름 없음'
+}
+
+type LinkFolder = { name: string; links: Map<string, { name: string; target: string }> }
+
+async function syncSearchLinks(raw: unknown) {
+  const state = raw as {
+    settings?: { searchLinks?: boolean }
+    fields?: { title?: string; portal?: string; items?: { path?: string; missing?: boolean }[] }[]
+  } | null
+  const marked = existsSync(path.join(LINK_ROOT, LINK_MARK))
+
+  if (state?.settings?.searchLinks === false) {
+    // 우리가 만든 폴더일 때만 지운다.
+    if (marked) await fs.rm(LINK_ROOT, { recursive: true, force: true })
+    return
+  }
+
+  // 소문자 이름 → 필드 폴더. 윈도우 파일 이름은 대소문자를 가리지 않는다.
+  const wanted = new Map<string, LinkFolder>()
+  for (const field of state?.fields ?? []) {
+    if (field?.portal) continue
+    const base = safeName(field?.title ?? '')
+    let folder = base
+    for (let n = 2; wanted.has(folder.toLowerCase()); n++) folder = `${base} (${n})`
+    const links = new Map<string, { name: string; target: string }>()
+    for (const item of field?.items ?? []) {
+      const target = item?.path
+      if (typeof target !== 'string' || target.startsWith('shell:') || item?.missing) continue
+      const stem = safeName(path.basename(target))
+      let name = `${stem}.lnk`
+      for (let n = 2; links.has(name.toLowerCase()); n++) name = `${stem} (${n}).lnk`
+      links.set(name.toLowerCase(), { name, target })
+    }
+    wanted.set(folder.toLowerCase(), { name: folder, links })
+  }
+
+  if (!marked) {
+    if (existsSync(LINK_ROOT)) {
+      // 사용자가 직접 만든 같은 이름의 폴더는 건드리지 않는다.
+      log(`검색용 바로가기: ${LINK_ROOT}가 이미 있어 건너뜀`)
+      return
+    }
+    await fs.mkdir(LINK_ROOT, { recursive: true })
+    const mark = path.join(LINK_ROOT, LINK_MARK)
+    await fs.writeFile(mark, '바탕 필드가 자동으로 관리하는 폴더입니다.\n')
+    execFile('attrib', ['+h', mark], { windowsHide: true }, () => {})
+    pinToQuickAccess(LINK_ROOT)
+  }
+
+  // 없어진 필드의 폴더 정리 — 바로가기만 든 폴더만 지운다.
+  for (const entry of await fs.readdir(LINK_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory() || wanted.has(entry.name.toLowerCase())) continue
+    const dir = path.join(LINK_ROOT, entry.name)
+    const inside = await fs.readdir(dir).catch(() => [] as string[])
+    if (inside.every((name) => name.toLowerCase().endsWith('.lnk'))) {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  for (const folder of wanted.values()) {
+    const dir = path.join(LINK_ROOT, folder.name)
+    await fs.mkdir(dir, { recursive: true })
+    for (const name of await fs.readdir(dir)) {
+      if (name.toLowerCase().endsWith('.lnk') && !folder.links.has(name.toLowerCase())) {
+        await fs.rm(path.join(dir, name), { force: true })
+      }
+    }
+    for (const link of folder.links.values()) {
+      const file = path.join(dir, link.name)
+      let current: string | null = null
+      try {
+        current = shell.readShortcutLink(file).target
+      } catch {
+        current = null
+      }
+      if (current && norm(current) === norm(link.target)) continue
+      shell.writeShortcutLink(file, existsSync(file) ? 'replace' : 'create', {
+        target: link.target,
+        description: '바탕 필드에 담긴 항목',
+      })
+    }
+  }
+}
+
+/** 파일 열기 창 왼쪽 목록에도 나오게 빠른 액세스에 한 번 고정한다. */
+function pinToQuickAccess(dir: string) {
+  execFile(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$ErrorActionPreference='SilentlyContinue';` +
+        `(New-Object -ComObject Shell.Application).Namespace('${dir.replace(/'/g, "''")}').Self.InvokeVerb('pintohome')`,
+    ],
+    { windowsHide: true, timeout: 10000 },
+    (error) => log(`빠른 액세스 고정 ${error ? `실패: ${error}` : '완료'}`),
+  )
 }
 
 /* ------------------------------------------------------------------ 바탕화면 스캔 */
@@ -618,13 +746,13 @@ function registerIpc() {
 
   // 인자를 붙여 등록하면 조회할 때도 같은 인자를 줘야 매칭된다. 애초에
   // 인자가 필요 없으므로 양쪽 다 붙이지 않는다 — 안 그러면 항상 '꺼짐'으로 읽힌다.
-  ipcMain.handle('autostart:get', () => app.getLoginItemSettings().openAtLogin)
+  ipcMain.handle('autostart:get', () => getAutostart())
 
-  ipcMain.handle('autostart:set', (_e, enabled: boolean) => {
-    app.setLoginItemSettings({ openAtLogin: enabled })
-    const now = app.getLoginItemSettings().openAtLogin
-    log(`자동 시작 ${enabled ? '켬' : '끔'} → ${now}`)
-    return now
+  ipcMain.handle('autostart:set', (_e, enabled: boolean) => setAutostart(enabled))
+
+  ipcMain.handle('links:open', async () => {
+    if (!existsSync(LINK_ROOT)) return false
+    return (await shell.openPath(LINK_ROOT)) === ''
   })
 
   ipcMain.handle('app:workarea', () => screen.getPrimaryDisplay().workArea)
@@ -1076,6 +1204,104 @@ function toggleVisible() {
   else win.showInactive()
 }
 
+/* ------------------------------------------------------------------ 자동 시작 */
+
+/**
+ * 시작 프로그램(Run 레지스트리)은 윈도우가 로그인 후 일부러 늦게, 다른 앱들과
+ * 한꺼번에 띄운다. 그동안 바탕화면에는 숨겨야 할 아이콘이 다 보인다.
+ * 작업 스케줄러의 '로그온 시' 작업은 그 지연 없이 바로 실행되므로 이걸 먼저 쓰고,
+ * 등록이 막힌 컴퓨터에서만 시작 프로그램으로 물러난다.
+ */
+const TASK_NAME = 'DeskField Autostart'
+
+/** 포터블 실행 파일은 임시 폴더로 풀려서 돌아간다 — 원래 exe 경로를 등록해야 한다. */
+function launcherPath() {
+  return process.env.PORTABLE_EXECUTABLE_FILE || app.getPath('exe')
+}
+
+function hasStartupTask() {
+  try {
+    execFileSync('schtasks', ['/query', '/tn', TASK_NAME], { stdio: 'ignore', windowsHide: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function xmlEscape(text: string) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function registerStartupTask() {
+  const user = xmlEscape(
+    process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : `${process.env.USERNAME}`,
+  )
+  const xml = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>바탕 필드 — 로그인하자마자 바로 실행</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${user}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>${user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>${xmlEscape(launcherPath())}</Command></Exec></Actions>
+</Task>
+`
+  const file = path.join(app.getPath('temp'), `deskfield-task-${process.pid}.xml`)
+  try {
+    // schtasks는 UTF-16 XML만 제대로 읽는다.
+    writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]))
+    execFileSync('schtasks', ['/create', '/tn', TASK_NAME, '/xml', file, '/f'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    return true
+  } catch (error) {
+    log(`작업 스케줄러 등록 실패: ${error}`)
+    return false
+  } finally {
+    try {
+      unlinkSync(file)
+    } catch {
+      /* 임시 파일 정리 실패는 무시 */
+    }
+  }
+}
+
+function getAutostart() {
+  if (process.platform !== 'win32') return app.getLoginItemSettings().openAtLogin
+  return hasStartupTask() || app.getLoginItemSettings().openAtLogin
+}
+
+function setAutostart(enabled: boolean) {
+  if (process.platform !== 'win32') {
+    app.setLoginItemSettings({ openAtLogin: enabled })
+    return app.getLoginItemSettings().openAtLogin
+  }
+  if (enabled) {
+    const viaTask = registerStartupTask()
+    // 작업이 잡히면 늦게 뜨는 시작 프로그램 등록은 지운다 — 두 번 뜰 이유가 없다.
+    app.setLoginItemSettings({ openAtLogin: !viaTask })
+    log(`자동 시작 켬 (${viaTask ? '작업 스케줄러' : '시작 프로그램'})`)
+  } else {
+    if (hasStartupTask()) {
+      try {
+        execFileSync('schtasks', ['/delete', '/tn', TASK_NAME, '/f'], { stdio: 'ignore', windowsHide: true })
+      } catch (error) {
+        log(`작업 스케줄러 삭제 실패: ${error}`)
+      }
+    }
+    app.setLoginItemSettings({ openAtLogin: false })
+    log('자동 시작 끔')
+  }
+  return getAutostart()
+}
+
 /* ------------------------------------------------------------------ 수명 주기 */
 
 app.whenReady().then(() => {
@@ -1085,11 +1311,17 @@ app.whenReady().then(() => {
   // 그래서 첫 실행에는 자동 시작을 기본으로 켠다 (설정에서 끌 수 있다).
   if (!existsSync(STATE_FILE) && process.platform === 'win32') {
     try {
-      app.setLoginItemSettings({ openAtLogin: true })
+      setAutostart(true)
       log('첫 실행 — 자동 시작 켬')
     } catch (error) {
       log(`자동 시작 설정 실패: ${error}`)
     }
+  } else if (process.platform === 'win32' && app.isPackaged) {
+    // 예전 버전은 시작 프로그램으로만 등록했다 — 켜 둔 사용자는 더 빨리 뜨는 작업으로 옮긴다.
+    // 실행 파일 위치가 바뀌었을 수도 있으니 켜져 있으면 매번 경로를 새로 맞춘다.
+    setTimeout(() => {
+      if (getAutostart()) setAutostart(true)
+    }, 5000)
   }
 
   // 예전 버전이 남긴 스테이징 잔재를 치운다 — 이게 남아 있으면
