@@ -249,9 +249,13 @@ async function writeState(state: unknown) {
  */
 const LINK_ROOT = path.join(app.getPath('home'), '바탕 필드')
 const LINK_MARK = '.deskfield'
+const QUICK_ACCESS = 'shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}'
 
 let linkTimer: ReturnType<typeof setTimeout> | null = null
 let linkPending: unknown = null
+let linkRunning: Promise<void> = Promise.resolve()
+/** 마지막으로 반영한 모양 — 필드를 옮기기만 했으면 다시 쓸 게 없다. */
+let linkApplied: string | null = null
 
 function scheduleSearchLinks(state: unknown) {
   if (process.platform !== 'win32') return
@@ -259,50 +263,98 @@ function scheduleSearchLinks(state: unknown) {
   if (linkTimer) clearTimeout(linkTimer)
   linkTimer = setTimeout(() => {
     linkTimer = null
-    void syncSearchLinks(linkPending).catch((error) => log(`검색용 바로가기 갱신 실패: ${error}`))
+    // 앞선 갱신이 끝난 뒤에 돈다 — 둘이 겹치면 같은 파일을 동시에 지우고 쓴다.
+    linkRunning = linkRunning
+      .then(() => syncSearchLinks(linkPending))
+      .catch((error) => log(`검색용 바로가기 갱신 실패: ${error}`))
   }, 1500)
 }
 
-function safeName(name: string) {
-  const clean = name.replace(/[\\/:*?"<>|]/g, '_').replace(/[. ]+$/, '').trim()
+function safeName(name: string, max: number) {
+  let clean = name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim().slice(0, max).replace(/[. ]+$/, '')
+  // 윈도우가 예약한 이름(CON, NUL…)은 확장자가 붙어도 만들 수 없다.
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(clean)) clean = `_${clean}`
   return clean || '이름 없음'
 }
 
-type LinkFolder = { name: string; links: Map<string, { name: string; target: string }> }
+type LinkSpec = { name: string; details: Electron.ShortcutDetails }
+
+/** 바로가기를 바로가기로 한 번 더 감싸지 않는다 — 원래 바로가기의 대상을 그대로 옮겨 적는다. */
+function linkSpec(target: string): { stem: string; details: Electron.ShortcutDetails } {
+  const base = path.basename(target)
+  if (/\.lnk$/i.test(base)) {
+    const stem = safeName(base.slice(0, -4), 100)
+    try {
+      const details = shell.readShortcutLink(target)
+      if (details.target) return { stem, details }
+    } catch {
+      /* 대상을 읽을 수 없는 바로가기(스토어 앱 등)는 그 파일 자체를 가리킨다 */
+    }
+    return { stem, details: { target } }
+  }
+  return { stem: safeName(base, 100), details: { target, description: '바탕 필드에 담긴 항목' } }
+}
+
+function sameLink(file: string, details: Electron.ShortcutDetails) {
+  try {
+    const current = shell.readShortcutLink(file)
+    return norm(current.target) === norm(details.target ?? '') && (current.args ?? '') === (details.args ?? '')
+  } catch {
+    return false
+  }
+}
 
 async function syncSearchLinks(raw: unknown) {
   const state = raw as {
-    settings?: { searchLinks?: boolean }
-    fields?: { title?: string; portal?: string; items?: { path?: string; missing?: boolean }[] }[]
+    settings?: { searchLinks?: boolean; hideOriginals?: boolean }
+    fields?: { title?: string; portal?: string; items?: { path?: string }[] }[]
   } | null
   const marked = existsSync(path.join(LINK_ROOT, LINK_MARK))
 
   if (state?.settings?.searchLinks === false) {
-    // 우리가 만든 폴더일 때만 지운다.
-    if (marked) await fs.rm(LINK_ROOT, { recursive: true, force: true })
+    // 끄면 폴더째 치운다 — 우리가 만든 폴더일 때만. 빠른 액세스에 죽은 고정이 남지 않게 먼저 푼다.
+    if (marked) {
+      await unpinFromQuickAccess(LINK_ROOT)
+      await fs.rm(LINK_ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
+      log('검색용 바로가기 폴더 삭제')
+    }
+    linkApplied = null
     return
   }
 
+  // 원본을 숨기지 않으면 원본이 그대로 검색된다 — 바로가기는 중복일 뿐이라 비운다.
+  const needed = state?.settings?.hideOriginals !== false
+
   // 소문자 이름 → 필드 폴더. 윈도우 파일 이름은 대소문자를 가리지 않는다.
-  const wanted = new Map<string, LinkFolder>()
-  for (const field of state?.fields ?? []) {
+  const wanted = new Map<string, { name: string; links: Map<string, LinkSpec> }>()
+  for (const field of needed ? state?.fields ?? [] : []) {
     if (field?.portal) continue
-    const base = safeName(field?.title ?? '')
-    let folder = base
-    for (let n = 2; wanted.has(folder.toLowerCase()); n++) folder = `${base} (${n})`
-    const links = new Map<string, { name: string; target: string }>()
+    const links = new Map<string, LinkSpec>()
     for (const item of field?.items ?? []) {
       const target = item?.path
-      if (typeof target !== 'string' || target.startsWith('shell:') || item?.missing) continue
-      const stem = safeName(path.basename(target))
+      if (typeof target !== 'string' || target.startsWith('shell:') || !existsSync(target)) continue
+      const { stem, details } = linkSpec(target)
       let name = `${stem}.lnk`
       for (let n = 2; links.has(name.toLowerCase()); n++) name = `${stem} (${n}).lnk`
-      links.set(name.toLowerCase(), { name, target })
+      links.set(name.toLowerCase(), { name, details })
     }
+    if (links.size === 0) continue
+    const base = safeName(field?.title ?? '', 60)
+    let folder = base
+    for (let n = 2; wanted.has(folder.toLowerCase()); n++) folder = `${base} (${n})`
     wanted.set(folder.toLowerCase(), { name: folder, links })
   }
 
+  const signature = JSON.stringify(
+    [...wanted.values()].map((folder) => [
+      folder.name,
+      [...folder.links.values()].map((link) => [link.name, link.details.target, link.details.args]),
+    ]),
+  )
+  if (signature === linkApplied) return
+
   if (!marked) {
+    if (wanted.size === 0) return
     if (existsSync(LINK_ROOT)) {
       // 사용자가 직접 만든 같은 이름의 폴더는 건드리지 않는다.
       log(`검색용 바로가기: ${LINK_ROOT}가 이미 있어 건너뜀`)
@@ -312,7 +364,7 @@ async function syncSearchLinks(raw: unknown) {
     const mark = path.join(LINK_ROOT, LINK_MARK)
     await fs.writeFile(mark, '바탕 필드가 자동으로 관리하는 폴더입니다.\n')
     execFile('attrib', ['+h', mark], { windowsHide: true }, () => {})
-    pinToQuickAccess(LINK_ROOT)
+    void pinToQuickAccess(LINK_ROOT)
   }
 
   // 없어진 필드의 폴더 정리 — 바로가기만 든 폴더만 지운다.
@@ -321,10 +373,11 @@ async function syncSearchLinks(raw: unknown) {
     const dir = path.join(LINK_ROOT, entry.name)
     const inside = await fs.readdir(dir).catch(() => [] as string[])
     if (inside.every((name) => name.toLowerCase().endsWith('.lnk'))) {
-      await fs.rm(dir, { recursive: true, force: true })
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
     }
   }
 
+  let failed = 0
   for (const folder of wanted.values()) {
     const dir = path.join(LINK_ROOT, folder.name)
     await fs.mkdir(dir, { recursive: true })
@@ -335,34 +388,44 @@ async function syncSearchLinks(raw: unknown) {
     }
     for (const link of folder.links.values()) {
       const file = path.join(dir, link.name)
-      let current: string | null = null
+      if (sameLink(file, link.details)) continue
+      // 하나가 실패해도 나머지는 계속 만든다.
       try {
-        current = shell.readShortcutLink(file).target
+        if (!shell.writeShortcutLink(file, 'create', link.details)) failed++
       } catch {
-        current = null
+        failed++
       }
-      if (current && norm(current) === norm(link.target)) continue
-      shell.writeShortcutLink(file, existsSync(file) ? 'replace' : 'create', {
-        target: link.target,
-        description: '바탕 필드에 담긴 항목',
-      })
     }
   }
+  if (failed > 0) log(`검색용 바로가기 ${failed}개를 만들지 못함`)
+  else linkApplied = signature
 }
 
+function powershell(command: string) {
+  return new Promise<boolean>((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='SilentlyContinue';${command}`],
+      { windowsHide: true, timeout: 15000 },
+      (error) => resolve(!error),
+    )
+  })
+}
+
+const psQuote = (text: string) => `'${text.replace(/'/g, "''")}'`
+
 /** 파일 열기 창 왼쪽 목록에도 나오게 빠른 액세스에 한 번 고정한다. */
-function pinToQuickAccess(dir: string) {
-  execFile(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `$ErrorActionPreference='SilentlyContinue';` +
-        `(New-Object -ComObject Shell.Application).Namespace('${dir.replace(/'/g, "''")}').Self.InvokeVerb('pintohome')`,
-    ],
-    { windowsHide: true, timeout: 10000 },
-    (error) => log(`빠른 액세스 고정 ${error ? `실패: ${error}` : '완료'}`),
+async function pinToQuickAccess(dir: string) {
+  const ok = await powershell(
+    `(New-Object -ComObject Shell.Application).Namespace(${psQuote(dir)}).Self.InvokeVerb('pintohome')`,
+  )
+  log(`빠른 액세스 고정 ${ok ? '완료' : '실패'}`)
+}
+
+async function unpinFromQuickAccess(dir: string) {
+  await powershell(
+    `(New-Object -ComObject Shell.Application).Namespace(${psQuote(QUICK_ACCESS)}).Items() | ` +
+      `Where-Object { $_.Path -eq ${psQuote(dir)} } | ForEach-Object { $_.InvokeVerb('unpinfromhome') }`,
   )
 }
 
@@ -1219,23 +1282,26 @@ function launcherPath() {
   return process.env.PORTABLE_EXECUTABLE_FILE || app.getPath('exe')
 }
 
-function hasStartupTask() {
-  try {
-    execFileSync('schtasks', ['/query', '/tn', TASK_NAME], { stdio: 'ignore', windowsHide: true })
-    return true
-  } catch {
-    return false
-  }
+function run(command: string, args: string[]) {
+  return new Promise<boolean>((resolve) => {
+    execFile(command, args, { windowsHide: true }, (error) => resolve(!error))
+  })
 }
+
+const hasStartupTask = () => run('schtasks', ['/query', '/tn', TASK_NAME])
+
+/** 마지막으로 작업에 등록한 실행 파일 경로 — 그대로면 켤 때마다 다시 등록하지 않는다. */
+const TASK_STAMP = path.join(app.getPath('userData'), 'autostart-task.txt')
 
 function xmlEscape(text: string) {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-function registerStartupTask() {
+async function registerStartupTask() {
   const user = xmlEscape(
     process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : `${process.env.USERNAME}`,
   )
+  // 배터리 조건·실행 시간 제한(기본 72시간)·낮은 우선순위(기본 7)는 상주 앱에 맞지 않아 전부 푼다.
   const xml = `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>바탕 필드 — 로그인하자마자 바로 실행</Description></RegistrationInfo>
@@ -1255,51 +1321,56 @@ function registerStartupTask() {
   const file = path.join(app.getPath('temp'), `deskfield-task-${process.pid}.xml`)
   try {
     // schtasks는 UTF-16 XML만 제대로 읽는다.
-    writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]))
-    execFileSync('schtasks', ['/create', '/tn', TASK_NAME, '/xml', file, '/f'], {
-      stdio: 'ignore',
-      windowsHide: true,
-    })
-    return true
+    await fs.writeFile(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]))
+    const ok = await run('schtasks', ['/create', '/tn', TASK_NAME, '/xml', file, '/f'])
+    if (ok) await fs.writeFile(TASK_STAMP, launcherPath(), 'utf8')
+    else log('작업 스케줄러 등록 실패')
+    return ok
   } catch (error) {
     log(`작업 스케줄러 등록 실패: ${error}`)
     return false
   } finally {
-    try {
-      unlinkSync(file)
-    } catch {
-      /* 임시 파일 정리 실패는 무시 */
-    }
+    await fs.rm(file, { force: true }).catch(() => {})
   }
 }
 
-function getAutostart() {
+async function getAutostart() {
   if (process.platform !== 'win32') return app.getLoginItemSettings().openAtLogin
-  return hasStartupTask() || app.getLoginItemSettings().openAtLogin
+  return (await hasStartupTask()) || app.getLoginItemSettings().openAtLogin
 }
 
-function setAutostart(enabled: boolean) {
+async function setAutostart(enabled: boolean) {
   if (process.platform !== 'win32') {
     app.setLoginItemSettings({ openAtLogin: enabled })
     return app.getLoginItemSettings().openAtLogin
   }
   if (enabled) {
-    const viaTask = registerStartupTask()
+    const viaTask = await registerStartupTask()
     // 작업이 잡히면 늦게 뜨는 시작 프로그램 등록은 지운다 — 두 번 뜰 이유가 없다.
     app.setLoginItemSettings({ openAtLogin: !viaTask })
     log(`자동 시작 켬 (${viaTask ? '작업 스케줄러' : '시작 프로그램'})`)
   } else {
-    if (hasStartupTask()) {
-      try {
-        execFileSync('schtasks', ['/delete', '/tn', TASK_NAME, '/f'], { stdio: 'ignore', windowsHide: true })
-      } catch (error) {
-        log(`작업 스케줄러 삭제 실패: ${error}`)
-      }
+    if ((await hasStartupTask()) && !(await run('schtasks', ['/delete', '/tn', TASK_NAME, '/f']))) {
+      log('작업 스케줄러 삭제 실패')
     }
+    await fs.rm(TASK_STAMP, { force: true }).catch(() => {})
     app.setLoginItemSettings({ openAtLogin: false })
     log('자동 시작 끔')
   }
   return getAutostart()
+}
+
+/**
+ * 예전 버전은 시작 프로그램으로만 등록했다 — 켜 둔 사용자는 더 빨리 뜨는 작업으로 옮긴다.
+ * 실행 파일 위치가 바뀌었으면(압축을 다른 곳에 다시 푼 경우 등) 작업의 경로도 새로 맞춘다.
+ */
+async function refreshAutostart() {
+  const legacy = app.getLoginItemSettings().openAtLogin
+  const task = await hasStartupTask()
+  if (!legacy && !task) return
+  const stamp = await fs.readFile(TASK_STAMP, 'utf8').catch(() => '')
+  if (task && !legacy && stamp === launcherPath()) return
+  await setAutostart(true)
 }
 
 /* ------------------------------------------------------------------ 수명 주기 */
@@ -1309,19 +1380,17 @@ app.whenReady().then(() => {
 
   // 이 앱은 켜져 있어야 필드가 보이고 숨긴 원본도 관리된다.
   // 그래서 첫 실행에는 자동 시작을 기본으로 켠다 (설정에서 끌 수 있다).
-  if (!existsSync(STATE_FILE) && process.platform === 'win32') {
-    try {
-      setAutostart(true)
-      log('첫 실행 — 자동 시작 켬')
-    } catch (error) {
-      log(`자동 시작 설정 실패: ${error}`)
+  // 개발 실행(electron.exe)은 등록하지 않는다 — 로그인할 때마다 빈 Electron이 뜬다.
+  if (process.platform === 'win32' && app.isPackaged) {
+    if (!existsSync(STATE_FILE)) {
+      void setAutostart(true).then(
+        () => log('첫 실행 — 자동 시작 켬'),
+        (error) => log(`자동 시작 설정 실패: ${error}`),
+      )
+    } else {
+      // 시작 직후의 바쁜 순간은 피한다.
+      setTimeout(() => void refreshAutostart().catch((error) => log(`자동 시작 점검 실패: ${error}`)), 5000)
     }
-  } else if (process.platform === 'win32' && app.isPackaged) {
-    // 예전 버전은 시작 프로그램으로만 등록했다 — 켜 둔 사용자는 더 빨리 뜨는 작업으로 옮긴다.
-    // 실행 파일 위치가 바뀌었을 수도 있으니 켜져 있으면 매번 경로를 새로 맞춘다.
-    setTimeout(() => {
-      if (getAutostart()) setAutostart(true)
-    }, 5000)
   }
 
   // 예전 버전이 남긴 스테이징 잔재를 치운다 — 이게 남아 있으면
