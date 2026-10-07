@@ -1169,7 +1169,21 @@ Add-Type -Namespace DF -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint id);
 [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder s, int max);
+public delegate bool EnumProc(IntPtr h, IntPtr l);
+[DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc fn, IntPtr l);
+public static bool HasShellView(IntPtr top) {
+  bool found = false;
+  EnumChildWindows(top, delegate(IntPtr h, IntPtr l) {
+    var sb = new System.Text.StringBuilder(64);
+    GetClassName(h, sb, 64);
+    if (sb.ToString() == "SHELLDLL_DefView") { found = true; return false; }
+    return true;
+  }, IntPtr.Zero);
+  return found;
+}
 '@
+$shell = New-Object -ComObject Shell.Application
+$desks = @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory'))
 $last = ''
 while ($true) {
   $h = [DF.Win]::GetForegroundWindow()
@@ -1177,7 +1191,17 @@ while ($true) {
   [void][DF.Win]::GetWindowThreadProcessId($h, [ref]$owner)
   $sb = New-Object System.Text.StringBuilder 256
   [void][DF.Win]::GetClassName($h, $sb, 256)
-  $line = "$owner|$($sb.ToString())"
+  $cls = $sb.ToString()
+  # 파일 열기·저장 창(폴더 보기가 든 대화상자)이거나 바탕화면 폴더를 연 탐색기면 1
+  $files = 0
+  if ($cls -eq '#32770') {
+    if ([DF.Win]::HasShellView($h)) { $files = 1 }
+  } elseif ($cls -eq 'CabinetWClass') {
+    foreach ($w in @($shell.Windows())) {
+      if ($w.HWND -eq $h.ToInt64() -and $desks -contains $w.Document.Folder.Self.Path) { $files = 1; break }
+    }
+  }
+  $line = "$owner|$cls|$files"
   if ($line -ne $last) { $last = $line; Write-Output $line }
   Start-Sleep -Milliseconds 700
 }`
@@ -1185,9 +1209,10 @@ while ($true) {
 function startForegroundWatch() {
   if (watcher || process.platform !== 'win32') return
   try {
-    const script = path.join(app.getPath('temp'), 'deskfield-watch.ps1')
-    writeFileSync(script, WATCH_SCRIPT, 'utf8')
-    watcher = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script], {
+    // 스크립트 파일(-File)은 실행 정책(윈도우 기본값 Restricted)에 막혀 바로 죽는다.
+    // 명령을 직접 넘기는 방식은 실행 정책의 대상이 아니다.
+    const encoded = Buffer.from(WATCH_SCRIPT, 'utf16le').toString('base64')
+    watcher = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
     })
@@ -1195,7 +1220,8 @@ function startForegroundWatch() {
     watcher.stdout?.on('data', (chunk: string) => {
       for (const line of chunk.split(/\r?\n/)) {
         if (!line.trim()) continue
-        const [owner, cls] = line.trim().split('|')
+        const [owner, cls, files] = line.trim().split('|')
+        setFilesOpen(files === '1')
         // 우리 창이거나 바탕화면이면 '보는 중', 그 밖의 앱이면 '다른 일 하는 중'.
         const active = Number(owner) === process.pid || DESKTOP_CLASSES.has(cls)
         if (active === desktopActive) continue
@@ -1203,8 +1229,13 @@ function startForegroundWatch() {
         win?.webContents.send('desktop:active', active)
       }
     })
-    watcher.on('exit', () => {
-      watcher = null
+    const self = watcher
+    watcher.on('exit', (code) => {
+      // 일부러 멈춘 게 아니면 남긴다 — 예전에는 실행 정책에 막혀 조용히 죽어도 알 길이 없었다.
+      if (watcher === self) {
+        watcher = null
+        log(`포그라운드 감시가 멈춤 (code ${code})`)
+      }
     })
     log('포그라운드 감시 시작')
   } catch (error) {
@@ -1223,7 +1254,59 @@ function stopForegroundWatch() {
   watcher = null
   desktopActive = true
   win?.webContents.send('desktop:active', true)
+  rehideOriginals()
   log('포그라운드 감시 중지')
+}
+
+/* ------------------------------------------------------------------ 파일 창에서 원본 보이기 */
+
+/**
+ * 숨김 속성은 바탕화면과 파일 열기 창이 똑같이 따른다 — 둘 다 같은 바탕화면 폴더를
+ * 보여주기 때문이다. 그래서 파일 열기·저장 창(또는 바탕화면 폴더를 연 탐색기)이 앞에
+ * 있는 동안만 원본을 잠깐 보이게 하고, 창이 닫히면 다시 숨긴다. 업로드·첨부할 때
+ * 바탕화면에서 그대로 고를 수 있다.
+ */
+let revealed = false
+let revealTimer: ReturnType<typeof setTimeout> | null = null
+/** 보이기·숨기기가 뒤섞여 끝나지 않게 한 줄로 세운다. */
+let revealQueue: Promise<unknown> = Promise.resolve()
+
+function setFilesOpen(open: boolean) {
+  if (quitting) return
+  if (revealTimer) {
+    clearTimeout(revealTimer)
+    revealTimer = null
+  }
+  if (!open) {
+    // 파일 창 위에 '바꿀까요?' 같은 작은 창이 잠깐 떠도 깜빡이지 않게 조금 기다린다.
+    if (revealed) revealTimer = setTimeout(rehideOriginals, 1500)
+    return
+  }
+  if (revealed) return
+  const state = readStateSync()
+  if (state?.settings?.hideOriginals === false || state?.settings?.revealInDialogs === false) return
+  const targets = hiddenCandidates(state)
+  if (targets.length === 0) return
+  revealed = true
+  revealQueue = revealQueue.then(() => setHiddenBatchAsync(targets, false))
+  log(`파일 창 — 숨긴 원본 ${targets.length}개를 잠시 보임`)
+}
+
+function rehideOriginals() {
+  if (revealTimer) {
+    clearTimeout(revealTimer)
+    revealTimer = null
+  }
+  // 종료 중이면 숨기지 않는다 — 종료 정리가 전부 되살린 뒤에 다시 숨겨 버린다.
+  if (!revealed || quitting) return
+  revealed = false
+  const state = readStateSync()
+  if (state?.settings?.hideOriginals === false) return
+  const targets = hiddenCandidates(state)
+  if (targets.length === 0) return
+  restored = false
+  revealQueue = revealQueue.then(() => setHiddenBatchAsync(targets, true))
+  log(`파일 창 닫힘 — 원본 ${targets.length}개 다시 숨김`)
 }
 
 /* ------------------------------------------------------------------ 트레이 */
@@ -1535,28 +1618,34 @@ async function setHiddenBatchAsync(paths: string[], hidden: boolean): Promise<nu
   })
 }
 
-/** 상태 파일에 담긴, 바탕화면 바로 아래의 실제 경로들 */
-function hiddenCandidates(): string[] {
+type SavedState = {
+  settings?: { hideOriginals?: boolean; revealInDialogs?: boolean }
+  fields?: { portal?: string; items?: { path?: string }[] }[]
+}
+
+function readStateSync(): SavedState | null {
   try {
-    const raw = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as {
-      fields?: { portal?: string; items?: { path?: string }[] }[]
-    }
-    const roots = desktopRoots().map((root) => root.toLowerCase())
-    const out: string[] = []
-    for (const field of raw?.fields ?? []) {
-      // 포털 필드는 폴더를 비추기만 할 뿐 숨기지 않는다
-      if (field?.portal) continue
-      for (const item of field?.items ?? []) {
-        const target = item?.path
-        if (typeof target !== 'string' || target.startsWith('shell:')) continue
-        if (!roots.includes(path.dirname(target).toLowerCase())) continue
-        out.push(target)
-      }
-    }
-    return out
+    return JSON.parse(readFileSync(STATE_FILE, 'utf8')) as SavedState
   } catch {
-    return []
+    return null
   }
+}
+
+/** 상태 파일에 담긴, 바탕화면 바로 아래의 실제 경로들 */
+function hiddenCandidates(raw: SavedState | null = readStateSync()): string[] {
+  const roots = desktopRoots().map((root) => root.toLowerCase())
+  const out: string[] = []
+  for (const field of raw?.fields ?? []) {
+    // 포털 필드는 폴더를 비추기만 할 뿐 숨기지 않는다
+    if (field?.portal) continue
+    for (const item of field?.items ?? []) {
+      const target = item?.path
+      if (typeof target !== 'string' || target.startsWith('shell:')) continue
+      if (!roots.includes(path.dirname(target).toLowerCase())) continue
+      out.push(target)
+    }
+  }
+  return out
 }
 
 /**

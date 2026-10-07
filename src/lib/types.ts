@@ -54,6 +54,8 @@ export interface Settings {
   labels: boolean
   /** 필드에 담은 항목의 바탕화면 원본을 숨겨 '이동'처럼 보이게 한다 */
   hideOriginals: boolean
+  /** 파일 열기·저장 창이 떠 있는 동안은 숨긴 원본을 잠깐 보이게 한다 (업로드·첨부용) */
+  revealInDialogs: boolean
   /** 숨긴 항목도 찾을 수 있게 사용자 폴더에 필드별 바로가기를 만들어 둔다 */
   searchLinks: boolean
   /** 마우스가 필드에서 벗어나 있으면 흐려진다 (다른 일 할 때 방해되지 않게) */
@@ -97,6 +99,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fieldGap: 24,
   labels: true,
   hideOriginals: true,
+  revealInDialogs: true,
   searchLinks: true,
   showBar: true,
   dimIdle: true,

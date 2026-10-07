@@ -91,10 +91,13 @@ export default function App() {
   usePassthrough(capture, onHover)
 
   // 다른 앱 창이 앞에 오면 흐려지고, 바탕화면으로 돌아오면 선명해진다.
+  // 파일 열기 창 감지도 같은 감시를 쓴다 — 둘 중 하나라도 켜져 있으면 돌린다.
+  const watchForeground =
+    state.settings.dimIdle || (state.settings.hideOriginals && state.settings.revealInDialogs)
   useEffect(() => {
-    api.watchForeground(state.settings.dimIdle)
+    api.watchForeground(watchForeground)
     if (!state.settings.dimIdle) setDimmed(false)
-  }, [state.settings.dimIdle])
+  }, [watchForeground, state.settings.dimIdle])
 
   useEffect(() => {
     return api.onDesktopActive((active) => {

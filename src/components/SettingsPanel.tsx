@@ -45,9 +45,14 @@ function Slider(props: {
   )
 }
 
-function Check(props: { checked: boolean; onChange: (checked: boolean) => void; children: ReactNode }) {
+function Check(props: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  indent?: boolean
+  children: ReactNode
+}) {
   return (
-    <label className="df-row df-row--check">
+    <label className={`df-row df-row--check ${props.indent ? 'df-row--indent' : ''}`}>
       <input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} />
       <span>{props.children}</span>
     </label>
@@ -165,12 +170,24 @@ export function SettingsPanel({ settings, onChange, onClose, onTidy }: Props) {
               필드에 담으면 바탕화면 원본 숨기기
               <small className="df-sub">앱이 켜져 있는 동안만 숨깁니다. 앱을 끄면 전부 다시 보입니다.</small>
             </Check>
+            {settings.hideOriginals && (
+              <Check
+                indent
+                checked={settings.revealInDialogs}
+                onChange={(revealInDialogs) => onChange({ revealInDialogs })}
+              >
+                파일 창에서는 원본 보이기 <b className="df-tag">권장</b>
+                <small className="df-sub">
+                  파일을 올리거나 첨부할 때처럼 열기·저장 창이 떠 있는 동안, 또는 탐색기로 바탕화면
+                  폴더를 볼 때만 원본을 잠깐 보이게 합니다. 창을 닫으면 다시 숨깁니다.
+                </small>
+              </Check>
+            )}
             <Check checked={settings.searchLinks} onChange={(searchLinks) => onChange({ searchLinks })}>
               숨긴 항목도 검색되게 <b className="df-tag">권장</b>
               <small className="df-sub">
-                숨긴 파일은 윈도우 검색·파일 열기 창에 안 나옵니다. 대신 사용자 폴더의{' '}
-                <b>바탕 필드</b> 폴더에 필드별 바로가기를 만들어 시작 메뉴 검색과 파일 열기 창(빠른
-                액세스)에서 찾을 수 있게 합니다.
+                숨긴 파일은 윈도우 검색에 안 나옵니다. 대신 사용자 폴더의 <b>바탕 필드</b> 폴더에
+                필드별 바로가기를 만들어 시작 메뉴 검색과 빠른 액세스에서 찾을 수 있게 합니다.
               </small>
             </Check>
             {settings.searchLinks && (
