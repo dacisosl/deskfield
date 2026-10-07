@@ -237,6 +237,7 @@ async function writeState(state: unknown) {
   // 저장 도중 앱이 죽어도 기존 파일이 깨지지 않도록 교체 방식으로 쓴다.
   await fs.rename(tmp, STATE_FILE)
   scheduleSearchLinks(state)
+  refreshKeepNames(state as SavedState)
 }
 
 /* ------------------------------------------------------------------ 검색용 바로가기 */
@@ -804,6 +805,11 @@ function registerIpc() {
         roots.includes(path.dirname(target).toLowerCase()),
     )
     if (hidden) restored = false
+    // 숨김이 왜 풀렸는지 나중에라도 알 수 있게 남긴다.
+    if (safe.length > 0) {
+      const names = safe.slice(0, 5).map((target) => path.basename(target)).join(', ')
+      log(`원본 ${hidden ? '숨김' : '보이기'} ${safe.length}개: ${names}${safe.length > 5 ? ' …' : ''}`)
+    }
     return setHiddenBatchAsync(safe, hidden)
   })
 
@@ -1309,6 +1315,99 @@ function rehideOriginals() {
   log(`파일 창 닫힘 — 원본 ${targets.length}개 다시 숨김`)
 }
 
+/* ------------------------------------------------------------------ 숨김 유지 */
+
+/**
+ * 한글 같은 편집기는 저장할 때 새 파일을 만들어 원본과 바꿔치기한다. 새 파일에는 숨김
+ * 속성이 없어서 저장하자마자 바탕화면에 다시 나타난다. 바탕화면 폴더를 지켜보다가
+ * 필드에 담긴 항목에 변화가 생기면(새로 생김·이름 바뀜·속성 바뀜) 숨김을 다시 건다.
+ * 이미 숨겨진 건 건드리지 않는다 — 건드리면 그 변화가 다시 감시에 걸려 끝없이 돈다.
+ */
+const keepWatchers: { close: () => void }[] = []
+/** 필드에 담긴 바탕화면 항목 이름(소문자) — 바탕화면의 다른 변화는 무시한다. */
+let keepNames = new Set<string>()
+const keepPending = new Set<string>()
+let keepTimer: ReturnType<typeof setTimeout> | null = null
+
+function refreshKeepNames(state: SavedState | null) {
+  keepNames =
+    state?.settings?.hideOriginals === false
+      ? new Set()
+      : new Set(hiddenCandidates(state).map((target) => path.basename(target).toLowerCase()))
+}
+
+function startKeepHidden() {
+  if (process.platform !== 'win32') return
+  for (const root of desktopRoots()) {
+    try {
+      const watcher = watch(root, { persistent: false }, (_event, name) => {
+        const key = name ? String(name).toLowerCase() : ''
+        if (!keepNames.has(key)) return
+        keepPending.add(key)
+        // 저장은 지우기·이름 바꾸기가 연달아 일어난다 — 잠잠해진 뒤에 한 번만.
+        if (keepTimer) clearTimeout(keepTimer)
+        keepTimer = setTimeout(() => void keepHidden(), 1200)
+      })
+      watcher.on('error', (error) => log(`바탕화면 감시 오류: ${root}: ${error}`))
+      keepWatchers.push(watcher)
+    } catch (error) {
+      log(`바탕화면 감시 실패: ${root}: ${error}`)
+    }
+  }
+}
+
+async function keepHidden() {
+  keepTimer = null
+  // 파일 창 때문에 일부러 보이는 중이면 창이 닫힐 때 한꺼번에 숨긴다.
+  if (quitting || revealed) return
+  const state = readStateSync()
+  if (state?.settings?.hideOriginals === false) return
+  const names = new Set(keepPending)
+  keepPending.clear()
+  const targets = hiddenCandidates(state).filter(
+    (target) => names.has(path.basename(target).toLowerCase()) && existsSync(target),
+  )
+  if (targets.length === 0) return
+  restored = false
+  const fixed = await (revealQueue = revealQueue.then(() => hideIfVisible(targets))) as number
+  if (fixed > 0) log(`숨김이 풀린 원본 ${fixed}개를 다시 숨김`)
+}
+
+/** 숨김이 풀린 것만 숨긴다. 몇 개를 고쳤는지 돌려준다. */
+function hideIfVisible(paths: string[]) {
+  return new Promise<number>((resolve) => {
+    const listFile = path.join(app.getPath('temp'), `deskfield-keep-${Date.now()}.txt`)
+    try {
+      writeFileSync(listFile, paths.join('\n'), 'utf8')
+    } catch {
+      resolve(0)
+      return
+    }
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$ErrorActionPreference='SilentlyContinue'; $n = 0;` +
+          `Get-Content -LiteralPath '${listFile}' -Encoding UTF8 | ForEach-Object {` +
+          `if ($_ -ne '') { $i = Get-Item -LiteralPath $_ -Force;` +
+          `if ($i -and -not ($i.Attributes -band [IO.FileAttributes]::Hidden)) {` +
+          `$i.Attributes = $i.Attributes -bor [IO.FileAttributes]::Hidden; $n++ } } }; $n`,
+      ],
+      { windowsHide: true, timeout: 15000 },
+      (_error, stdout) => {
+        try {
+          unlinkSync(listFile)
+        } catch {
+          /* 정리 실패는 무시 */
+        }
+        resolve(Number(String(stdout).trim()) || 0)
+      },
+    )
+  })
+}
+
 /* ------------------------------------------------------------------ 트레이 */
 
 function trayImage() {
@@ -1501,6 +1600,9 @@ app.whenReady().then(() => {
   createWindow()
   log('창 생성 완료')
 
+  refreshKeepNames(readStateSync())
+  startKeepHidden()
+
   // 트레이는 아이콘 로드 실패로 예외를 던질 수 있다. 여기서 죽으면 단축키가 안 걸린다.
   try {
     buildTray()
@@ -1673,4 +1775,5 @@ app.on('before-quit', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   stopForegroundWatch()
+  for (const watcher of keepWatchers) watcher.close()
 })
